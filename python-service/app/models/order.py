@@ -17,7 +17,7 @@ class Order(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    items = db.relationship("OrderItem", backref="order", lazy="selectin")
+    items = db.relationship("OrderItem", backref="order", lazy="joined")
 
     def to_dict(self, include_items=False):
         result = {
