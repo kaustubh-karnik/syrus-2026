@@ -4,11 +4,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-
-import logging
-
-logger = logging.getLogger(__name__)
-
 from app import db
 from app.models.order import Order
 from app.services.payment_service import calculate_tax, apply_discount
