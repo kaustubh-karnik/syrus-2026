@@ -82,9 +82,13 @@ def create_order():
     discount_code = data.get("discount_code")
 
     # Apply discount only once per order to prevent double application
+    # Idempotency: discount should only be applied if not already persisted (i.e., new order)
+    # and not already applied in this request (checked via discount_applied flag)
     if discount_code and not data.get('discount_applied', False):
         _, discount_amount = apply_discount(original_subtotal, discount_code)
         subtotal = original_subtotal - discount_amount
+        # Mark discount as applied in request context to prevent re-application in same request
+        data['discount_applied'] = True
 
     # Total = discounted subtotal + tax
     total = subtotal + tax
