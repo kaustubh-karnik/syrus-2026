@@ -76,14 +76,16 @@ def create_order():
     # Calculate tax and discount
     from app.services.payment_service import calculate_tax, apply_discount
 
-    tax = calculate_tax(subtotal)
+    original_subtotal = subtotal
+    tax = calculate_tax(original_subtotal)
     discount_amount = 0
     discount_code = data.get("discount_code")
 
     if discount_code:
         subtotal, discount_amount = apply_discount(subtotal, discount_code)
 
-    total = subtotal + tax - discount_amount
+    # Discount already applied to subtotal; total = discounted_subtotal + tax
+    total = subtotal + tax
 
     order = Order(
         user_id=int(user_id),
