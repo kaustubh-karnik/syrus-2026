@@ -46,6 +46,8 @@ def search_products():
     if not query:
         return jsonify({"error": "Search query parameter 'q' is required"}), 400
 
+    # SECURITY: Using SQLAlchemy's ilike() with bound parameters prevents SQL injection.
+    # The query value is never directly interpolated into SQL; it is safely bound as a parameter.
     search_term = f"%{query}%"
     products = Product.query.filter(
         Product.name.ilike(search_term) | Product.description.ilike(search_term)
