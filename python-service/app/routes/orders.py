@@ -81,10 +81,9 @@ def create_order():
     discount_amount = 0
     discount_code = data.get("discount_code")
 
-    # Always compute discount from original subtotal to prevent double application
-    if discount_code:
+    # Apply discount only once per order to prevent double application
+    if discount_code and not data.get('discount_applied', False):
         _, discount_amount = apply_discount(original_subtotal, discount_code)
-        # Apply discount only to the final subtotal (not original_subtotal)
         subtotal = original_subtotal - discount_amount
 
     # Total = discounted subtotal + tax
