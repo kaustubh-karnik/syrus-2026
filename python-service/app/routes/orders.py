@@ -86,6 +86,8 @@ def create_order():
     # and not already applied in this request (checked via discount_applied flag)
     if discount_code and not data.get('discount_applied', False):
         _, discount_amount = apply_discount(original_subtotal, discount_code)
+        # Safety: ensure discount does not exceed subtotal (prevents negative totals)
+        discount_amount = min(discount_amount, original_subtotal)
         subtotal = original_subtotal - discount_amount
         # Mark discount as applied in request context to prevent re-application in same request
         data['discount_applied'] = True
