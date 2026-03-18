@@ -80,8 +80,10 @@ def create_order():
     tax = calculate_tax(original_subtotal)
     discount_amount = 0
     discount_code = data.get("discount_code")
+    discount_already_applied = data.get("discount_already_applied", False)
 
-    if discount_code:
+    # Prevent double application of discount: only apply if not already applied in request
+    if discount_code and not discount_already_applied:
         subtotal, discount_amount = apply_discount(subtotal, discount_code)
 
     # Discount already applied to subtotal; total = discounted_subtotal + tax
@@ -94,7 +96,7 @@ def create_order():
         discount_amount=discount_amount,
         total=total,
         discount_code=discount_code,
-        discount_applied=True,
+        discount_applied=bool(discount_amount > 0),
     )
     db.session.add(order)
     db.session.flush()
