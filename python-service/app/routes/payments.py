@@ -60,10 +60,11 @@ def checkout():
     if order.status != "pending":
         return jsonify({"error": f"Order is already {order.status}"}), 400
 
-    # Discount should already be applied during order creation; do not re-apply here
-    # Verify discount consistency if present
+    # Discount MUST already be applied during order creation; do not re-apply here
+    # Critical safety check: if discount_code exists but discount_applied is False, reject checkout
     if order.discount_code and not order.discount_applied:
-        logger.warning(f"Discount code {order.discount_code} not marked as applied for order {order.id}. This indicates a logic error in order creation.")
+        logger.error(f"Discount code {order.discount_code} not marked as applied for order {order.id}. Rejecting checkout to prevent double-application.")
+        return jsonify({"error": "Invalid order state: discount not applied during creation"}), 400
 
     # Simulate payment processing
     order.status = "paid"
