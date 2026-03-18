@@ -3,6 +3,9 @@
 from decimal import Decimal, ROUND_HALF_UP
 
 TAX_RATE = Decimal('0.085')  # 8.5% tax rate
+# IMPORTANT: Always convert subtotal to string before Decimal to avoid float precision issues
+# e.g., Decimal(str(subtotal)) instead of Decimal(subtotal) if subtotal is a float
+
 
 DISCOUNT_CODES = {
     "SAVE10": 10,   # 10% off
