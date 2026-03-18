@@ -1,0 +1,21 @@
+{
+  "id": "INC-105",
+  "title": "Event loop blocked — /api/reports endpoint freezes server for 3+ seconds",
+  "severity": "P2 - High",
+  "service": "node-service",
+  "reported_by": "Platform Team",
+  "environment": "production",
+  "timestamp": "2026-02-28T07:30:00Z",
+  "description": "The GET /api/reports/sales endpoint causes the entire Node.js event loop to block for 3-5 seconds on each request. During this time, no other requests can be processed, causing timeouts across the service. Investigation shows a synchronous file read operation is being performed on every request to load a large HTML email template.",
+  "steps_to_reproduce": [
+    "Send GET /api/reports/sales",
+    "Simultaneously send GET /api/health (or any other endpoint)",
+    "Observe that the health check hangs until the report request completes",
+    "Report request takes 3-5 seconds"
+  ],
+  "error_log": "No errors, but monitoring shows:\n- Event loop lag: 3200ms (threshold: 100ms)\n- p99 latency spike across all endpoints during report generation\n- Thread pool utilization: 100%",
+  "expected_behavior": "Report generation should not block other request processing",
+  "actual_behavior": "Synchronous file I/O blocks the event loop, causing all concurrent requests to queue",
+  "recent_changes": "Added email report generation feature with templated HTML output",
+  "tags": ["performance", "event-loop-blocking", "sync-io"]
+}

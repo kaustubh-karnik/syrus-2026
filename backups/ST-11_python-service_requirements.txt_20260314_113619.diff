@@ -1,0 +1,24 @@
+# PATCH METADATA
+# Ticket    : ST-11
+# File      : python-service\requirements.txt
+# Timestamp : 20260314_113619
+# Rollback  : patch -R python-service\requirements.txt ST-11_python-service_requirements.txt_20260314_113619.diff
+#
+--- a/python-service\requirements.txt
++++ b/python-service\requirements.txt
+@@ -1,7 +1,7 @@
+ Flask>=2.3.0
+
+ Flask-SQLAlchemy==3.1.1
+
+ Flask-JWT-Extended==4.6.0
+
+-Flask-Cors==4.0.0
+
++flask-cors==3.0.10
+
+ psycopg2-binary==2.9.9
+
+ bcrypt==4.1.2
+
+ marshmallow==3.20.1

@@ -1,0 +1,6 @@
+# PATCH METADATA
+# Ticket    : ST-11
+# File      : python-service\requirements.txt
+# Timestamp : 20260314_142631
+# Rollback  : patch -R python-service\requirements.txt ST-11_python-service_requirements.txt_20260314_142631.diff
+#

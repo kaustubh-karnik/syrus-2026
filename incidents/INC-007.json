@@ -1,0 +1,21 @@
+{
+  "id": "INC-007",
+  "title": "SQL injection vulnerability detected in product search endpoint",
+  "severity": "P0 - Critical Security",
+  "service": "python-service",
+  "reported_by": "Security Team",
+  "environment": "all",
+  "timestamp": "2026-02-28T06:00:00Z",
+  "description": "A penetration test has revealed a SQL injection vulnerability in the GET /api/products/search endpoint. The 'q' query parameter is being interpolated directly into a raw SQL query without parameterization. An attacker can extract sensitive data or modify the database.",
+  "steps_to_reproduce": [
+    "Send GET /api/products/search?q=test' OR '1'='1",
+    "Observe that all products are returned instead of search results",
+    "Send GET /api/products/search?q=test' UNION SELECT id,email,password_hash,null,null FROM users--",
+    "Observe that user credentials are leaked in the response"
+  ],
+  "error_log": "No errors — the injection executes successfully, which is the problem.",
+  "expected_behavior": "Search query is parameterized and only returns matching products",
+  "actual_behavior": "Raw SQL string interpolation allows arbitrary SQL execution",
+  "recent_changes": "Search endpoint was added as a quick feature with raw SQL for 'performance'",
+  "tags": ["security", "sql-injection", "owasp-top-10"]
+}

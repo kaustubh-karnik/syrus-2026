@@ -1,0 +1,21 @@
+{
+  "id": "INC-102",
+  "title": "CORS error blocking all frontend API requests",
+  "severity": "P1 - Critical",
+  "service": "node-service",
+  "reported_by": "Frontend Team",
+  "environment": "staging",
+  "timestamp": "2026-02-28T10:00:00Z",
+  "description": "After deploying the latest Node.js service update, all API requests from the frontend are being blocked by CORS policy. The browser console shows 'Access-Control-Allow-Origin' header mismatch. The frontend application runs on port 5173 (Vite dev server) but the CORS configuration only allows port 3000.",
+  "steps_to_reproduce": [
+    "Start the frontend dev server (runs on http://localhost:5173)",
+    "Start the node-service API (runs on http://localhost:3000)",
+    "Open the frontend in a browser",
+    "Observe CORS errors on every API call in the browser console"
+  ],
+  "error_log": "Access to XMLHttpRequest at 'http://localhost:3000/api/products' from origin 'http://localhost:5173' has been blocked by CORS policy: Response to preflight request doesn't pass access control check: The 'Access-Control-Allow-Origin' header has a value 'http://localhost:3000' that is not equal to the supplied origin.",
+  "expected_behavior": "API accepts requests from the frontend origin (http://localhost:5173) and production domain",
+  "actual_behavior": "CORS is configured to only allow requests from http://localhost:3000, which is the API's own origin",
+  "recent_changes": "CORS middleware was added during security hardening sprint",
+  "tags": ["misconfiguration", "cors", "frontend-blocked"]
+}

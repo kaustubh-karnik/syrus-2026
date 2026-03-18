@@ -1,0 +1,20 @@
+{
+  "id": "INC-107",
+  "title": "Server crashes with 'Cannot read properties of undefined (reading avatar)' on user profiles",
+  "severity": "P1 - Critical",
+  "service": "node-service",
+  "reported_by": "Frontend Team",
+  "environment": "production",
+  "timestamp": "2026-02-28T16:30:00Z",
+  "description": "When fetching profiles of users who haven't completed onboarding (no profile data set), the server crashes with a TypeError. The code accesses user.profile.avatar without checking if profile is null/undefined. This affects approximately 30% of users who signed up but never completed their profile.",
+  "steps_to_reproduce": [
+    "Create a new user account (profile is null by default)",
+    "Send GET /api/users/me/profile",
+    "Server crashes with TypeError"
+  ],
+  "error_log": "TypeError: Cannot read properties of undefined (reading 'avatar')\n    at formatUserResponse (/app/src/utils/formatters.js:15:42)\n    at /app/src/routes/users.js:48:20\n    at processTicksAndRejections (internal/process/task_queues.js:95:5)",
+  "expected_behavior": "Returns user profile with null/default values for missing profile fields",
+  "actual_behavior": "Server crashes when user.profile is null/undefined",
+  "recent_changes": "Added avatar URL to user profile response for the new frontend design",
+  "tags": ["runtime-crash", "null-reference", "type-error"]
+}

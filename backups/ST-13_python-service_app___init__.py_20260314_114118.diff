@@ -1,0 +1,6 @@
+# PATCH METADATA
+# Ticket    : ST-13
+# File      : python-service\app\__init__.py
+# Timestamp : 20260314_114118
+# Rollback  : patch -R python-service\app\__init__.py ST-13_python-service_app___init__.py_20260314_114118.diff
+#

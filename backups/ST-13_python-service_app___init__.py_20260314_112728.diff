@@ -1,0 +1,47 @@
+# PATCH METADATA
+# Ticket    : ST-13
+# File      : python-service\app\__init__.py
+# Timestamp : 20260314_112728
+# Rollback  : patch -R python-service\app\__init__.py ST-13_python-service_app___init__.py_20260314_112728.diff
+#
+--- a/python-service\app\__init__.py
++++ b/python-service\app\__init__.py
+@@ -10,9 +10,9 @@
+ 
+
+ db = SQLAlchemy()
+
+ jwt = JWTManager()
+
++from flask import json
+
+ 
+
+-
+
+-class CustomJSONEncoder(JSONEncoder):
+
++class CustomJSONEncoder(json.JSONEncoder):
+
+     """Custom JSON encoder that handles datetime and Decimal types."""
+
+ 
+
+     def default(self, obj):
+
+@@ -20,7 +20,7 @@
+             return obj.isoformat()
+
+         if isinstance(obj, Decimal):
+
+             return float(obj)
+
+-        return super().default(obj)
+
++        return json.JSONEncoder.default(self, obj)
+
+ 
+
+ 
+
+ def create_app(config_name=None):

@@ -1,0 +1,21 @@
+{
+  "id": "INC-108",
+  "title": "GET /api/products/search returns 500 - Cannot find module 'fuse.js'",
+  "severity": "P2 - High",
+  "service": "node-service",
+  "reported_by": "Frontend Team",
+  "environment": "staging",
+  "timestamp": "2026-02-28T11:30:00Z",
+  "description": "The product search endpoint was recently added to enable fuzzy search functionality. However, it crashes with a module not found error when called. Other product endpoints (list, get by ID, create) work fine. The developer who implemented the search feature may have forgotten to add a required package to the project dependencies.",
+  "steps_to_reproduce": [
+    "Start the Node.js service with npm start",
+    "Send GET /api/products/search?q=widget",
+    "Receive 500 Internal Server Error with 'Search failed' message",
+    "Other product endpoints like GET /api/products work normally"
+  ],
+  "error_log": "Error: Cannot find module 'fuse.js'\nRequire stack:\n- /app/src/routes/products.js",
+  "expected_behavior": "Returns 200 with array of products matching the search query",
+  "actual_behavior": "Returns 500 Internal Server Error. Console shows 'Cannot find module fuse.js'",
+  "recent_changes": "Added product search endpoint using fuse.js for fuzzy matching",
+  "tags": ["missing-dependency", "module-not-found", "search", "blocking"]
+}

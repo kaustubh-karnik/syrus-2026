@@ -1,0 +1,20 @@
+{
+  "id": "INC-005",
+  "title": "/api/orders endpoint response time increased from 200ms to 8s",
+  "severity": "P2 - High",
+  "service": "python-service",
+  "reported_by": "Platform Team",
+  "environment": "production",
+  "timestamp": "2026-02-28T08:00:00Z",
+  "description": "The GET /api/orders endpoint response time has degraded severely. Average response time went from ~200ms to over 8 seconds after the last release. The endpoint lists orders for a user including their order items. Database CPU utilization has spiked to 85% during peak hours.",
+  "steps_to_reproduce": [
+    "Create a user with 10+ orders, each having 3-5 items",
+    "Send GET /api/orders with the user's auth token",
+    "Observe response time > 5 seconds"
+  ],
+  "error_log": "No errors — endpoint returns correct data but very slowly. DB logs show hundreds of SELECT queries per single API call.",
+  "expected_behavior": "Endpoint returns orders with items in under 500ms",
+  "actual_behavior": "Endpoint takes 5-10 seconds and generates excessive database queries",
+  "recent_changes": "Refactored order listing to include order items in the response payload",
+  "tags": ["performance", "n+1-query", "database"]
+}

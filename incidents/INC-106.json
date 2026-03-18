@@ -1,0 +1,23 @@
+{
+  "id": "INC-106",
+  "title": "Pagination returns wrong results — first page shows items starting from offset",
+  "severity": "P2 - High",
+  "service": "node-service",
+  "reported_by": "Frontend Team",
+  "environment": "production",
+  "timestamp": "2026-02-28T15:00:00Z",
+  "description": "The product listing pagination is broken. Page 1 skips the first N items (where N is the page size) and page 0 doesn't exist. Users never see the first page of products. The offset calculation in the pagination utility uses page * limit instead of (page - 1) * limit.",
+  "steps_to_reproduce": [
+    "Send GET /api/products?page=1&limit=10",
+    "Expected: Products 1-10",
+    "Actual: Products 11-20 (first 10 products are skipped)",
+    "Send GET /api/products?page=2&limit=10",
+    "Expected: Products 11-20",
+    "Actual: Products 21-30"
+  ],
+  "error_log": "No errors. Functionally incorrect results.",
+  "expected_behavior": "Page 1 returns items 1-10, Page 2 returns items 11-20, etc.",
+  "actual_behavior": "Page 1 returns items 11-20, Page 2 returns items 21-30 (off by one page)",
+  "recent_changes": "Pagination was rewritten during the API standardization sprint",
+  "tags": ["logic-bug", "pagination", "off-by-one"]
+}

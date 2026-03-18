@@ -1,0 +1,92 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [main, fix/*]
+  pull_request:
+    branches: [main]
+
+jobs:
+  python-tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: appuser
+          POSTGRES_PASSWORD: apppassword
+          POSTGRES_DB: ecommerce_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        working-directory: python-service
+        run: |
+          pip install -r requirements.txt
+      - name: Run linter
+        working-directory: python-service
+        run: |
+          pip install flake8
+          flake8 app/ --max-line-length=120 --ignore=E501,W503
+      - name: Run tests
+        working-directory: python-service
+        env:
+          DATABASE_HOST: localhost
+          DATABASE_PORT: 5432
+          DATABASE_USER: appuser
+          DATABASE_PASSWORD: apppassword
+          DATABASE_NAME: ecommerce_test
+          SECRET_KEY: testsecretkey
+          FLASK_ENV: testing
+        run: |
+          python -m pytest tests/ -v --tb=short
+
+  node-tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: appuser
+          POSTGRES_PASSWORD: apppassword
+          POSTGRES_DB: ecommerce_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+      - name: Install dependencies
+        working-directory: node-service
+        run: npm install
+      - name: Run linter
+        working-directory: node-service
+        run: npm run lint
+      - name: Run tests
+        working-directory: node-service
+        env:
+          DB_HOST: localhost
+          DB_PORT: 5432
+          DB_USER: appuser
+          DB_PASSWORD: apppassword
+          DB_NAME: ecommerce_test
+          JWT_SECRET: testsecretkey
+          NODE_ENV: test
+        run: npm test

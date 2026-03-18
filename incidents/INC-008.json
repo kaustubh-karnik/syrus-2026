@@ -1,0 +1,21 @@
+{
+  "id": "INC-008",
+  "title": "POST /api/payments/checkout returns 500 Internal Server Error",
+  "severity": "P1 - Critical",
+  "service": "python-service",
+  "reported_by": "Backend Team",
+  "environment": "staging",
+  "timestamp": "2026-02-28T16:45:00Z",
+  "description": "The checkout endpoint crashes with an Internal Server Error when attempting to process payment for a valid order. The order is created successfully, but calling POST /api/payments/checkout with the order ID results in a 500 error. This was introduced in a recent commit that added logging statements to the payment flow.",
+  "steps_to_reproduce": [
+    "Create a new order via POST /api/orders/ with valid items",
+    "Note the order_id from the response",
+    "Send POST /api/payments/checkout with payload: {\"order_id\": <order_id>}",
+    "Receive 500 Internal Server Error instead of 200 with payment confirmation"
+  ],
+  "error_log": "NameError: name 'logging' is not defined in app/routes/payments.py line 62",
+  "expected_behavior": "Returns 200 with payment confirmation and order status updated to 'paid'",
+  "actual_behavior": "Returns 500 Internal Server Error. Order status remains 'pending'",
+  "recent_changes": "Added logging statements to track payment processing events",
+  "tags": ["missing-import", "runtime-crash", "payments", "blocking"]
+}

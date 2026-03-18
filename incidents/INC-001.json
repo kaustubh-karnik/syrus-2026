@@ -1,0 +1,20 @@
+{
+  "id": "INC-001",
+  "title": "Server returns 500 error on POST /api/auth/login after latest deployment",
+  "severity": "P1 - Critical",
+  "service": "python-service",
+  "reported_by": "Frontend Team",
+  "environment": "staging",
+  "timestamp": "2026-02-28T14:23:00Z",
+  "description": "After the latest deployment to staging, users are unable to log in. The POST /api/auth/login endpoint returns a 500 Internal Server Error for all login attempts, even with valid credentials. This was working fine before the last merge to main.",
+  "steps_to_reproduce": [
+    "Send a POST request to /api/auth/login with valid credentials",
+    "Payload: {\"email\": \"user@example.com\", \"password\": \"correctpassword\"}",
+    "Receive 500 Internal Server Error instead of 200 with JWT token"
+  ],
+  "error_log": "TypeError: a bytes-like object is required, not 'str' in app/routes/auth.py line 42",
+  "expected_behavior": "Returns 200 with JWT token for valid credentials, 401 for invalid credentials",
+  "actual_behavior": "Returns 500 Internal Server Error for all requests to /api/auth/login",
+  "recent_changes": "Updated bcrypt library from 3.2.0 to 4.1.2 and refactored auth routes",
+  "tags": ["runtime-crash", "authentication", "blocking"]
+}

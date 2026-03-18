@@ -1,0 +1,20 @@
+{
+  "id": "INC-003",
+  "title": "ImportError after upgrading Flask — JSONEncoder not found",
+  "severity": "P2 - High",
+  "service": "python-service",
+  "reported_by": "Backend Team",
+  "environment": "all",
+  "timestamp": "2026-02-27T16:45:00Z",
+  "description": "After upgrading Flask from 2.2.x to 2.3.x, the application fails to start with an ImportError. The custom JSON encoder that handles datetime and Decimal serialization is broken because Flask removed flask.json.JSONEncoder in version 2.3.",
+  "steps_to_reproduce": [
+    "Run pip install -r requirements.txt (installs Flask>=2.3)",
+    "Run python run.py",
+    "Application fails to start with ImportError"
+  ],
+  "error_log": "ImportError: cannot import name 'JSONEncoder' from 'flask.json' (/usr/local/lib/python3.11/site-packages/flask/json/__init__.py)",
+  "expected_behavior": "Application starts successfully and custom JSON serialization works for datetime and Decimal types",
+  "actual_behavior": "Application fails to start due to ImportError",
+  "recent_changes": "Updated requirements.txt to use Flask>=2.3.0 for security patches",
+  "tags": ["dependency-issue", "import-error", "breaking-change"]
+}

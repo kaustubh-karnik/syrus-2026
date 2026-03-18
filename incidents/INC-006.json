@@ -1,0 +1,21 @@
+{
+  "id": "INC-006",
+  "title": "Discount code applied twice during checkout resulting in incorrect order totals",
+  "severity": "P1 - Critical",
+  "service": "python-service",
+  "reported_by": "Finance Team",
+  "environment": "production",
+  "timestamp": "2026-02-27T19:00:00Z",
+  "description": "Multiple customer orders show incorrect totals where the discount appears to have been applied twice. For example, a $100 order with a 20% discount code should total $80, but customers are being charged $64 (discount applied twice: $100 -> $80 -> $64). This is causing revenue loss.",
+  "steps_to_reproduce": [
+    "Add items to cart totaling $100",
+    "Apply discount code 'SAVE20' (20% off)",
+    "Proceed to checkout",
+    "Observe final total is $64 instead of $80"
+  ],
+  "error_log": "No errors in logs. The system processes the order successfully but with wrong totals.",
+  "expected_behavior": "Discount is applied once: $100 * 0.80 = $80.00",
+  "actual_behavior": "Discount is applied twice: $100 * 0.80 * 0.80 = $64.00",
+  "recent_changes": "Added discount support to the cart summary endpoint and checkout flow",
+  "tags": ["logic-bug", "payments", "revenue-impact"]
+}

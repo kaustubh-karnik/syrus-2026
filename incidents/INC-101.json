@@ -1,0 +1,20 @@
+{
+  "id": "INC-101",
+  "title": "Node.js server crashes with unhandled promise rejection on GET /api/users/:id",
+  "severity": "P1 - Critical",
+  "service": "node-service",
+  "reported_by": "Frontend Team",
+  "environment": "production",
+  "timestamp": "2026-02-28T13:00:00Z",
+  "description": "The Node.js service crashes intermittently when fetching user profiles. When a user ID that doesn't exist in the database is requested, the server process exits with an unhandled promise rejection instead of returning a 404 response. This causes downtime until the process restarts.",
+  "steps_to_reproduce": [
+    "Send GET /api/users/99999 (non-existent user ID)",
+    "Server process crashes",
+    "All concurrent requests fail until process restarts"
+  ],
+  "error_log": "UnhandledPromiseRejectionWarning: Error: User not found\n    at UserService.getById (/app/src/services/userService.js:25:11)\n    at processTicksAndRejections (internal/process/task_queues.js:95:5)\nThis error originated either by throwing inside of an async function without a catch block, or by rejecting a promise which was not handled.",
+  "expected_behavior": "Returns 404 JSON response: {\"error\": \"User not found\"} without crashing",
+  "actual_behavior": "Entire server process crashes on unhandled promise rejection",
+  "recent_changes": "Migrated user routes from callbacks to async/await",
+  "tags": ["runtime-crash", "async-error", "process-exit"]
+}

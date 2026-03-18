@@ -1,0 +1,20 @@
+{
+  "id": "INC-002",
+  "title": "App fails to connect to database in staging environment",
+  "severity": "P1 - Critical",
+  "service": "python-service",
+  "reported_by": "DevOps Team",
+  "environment": "staging",
+  "timestamp": "2026-02-28T09:15:00Z",
+  "description": "The Python service cannot connect to PostgreSQL in the staging environment. The application starts but immediately crashes when any endpoint requiring database access is hit. The database is confirmed running and accessible from other services. This issue only occurs in staging/production — local development works fine.",
+  "steps_to_reproduce": [
+    "Deploy python-service to staging environment",
+    "Attempt to hit any database-backed endpoint (e.g., GET /api/products)",
+    "Observe connection refused error"
+  ],
+  "error_log": "sqlalchemy.exc.OperationalError: (psycopg2.OperationalError) could not connect to server: Connection refused\n\tIs the server running on host \"localhost\" and accepting TCP/IP connections on port 5432?",
+  "expected_behavior": "Service connects to the staging PostgreSQL database configured via environment variables",
+  "actual_behavior": "Service always tries to connect to localhost:5432 regardless of environment variables",
+  "recent_changes": "Infrastructure team updated environment variable naming convention across all services",
+  "tags": ["misconfiguration", "database", "environment"]
+}

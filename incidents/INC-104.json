@@ -1,0 +1,21 @@
+{
+  "id": "INC-104",
+  "title": "test_user_registration suite failing — email validation rejects valid addresses",
+  "severity": "P3 - Medium",
+  "service": "node-service",
+  "reported_by": "QA Team",
+  "environment": "CI",
+  "timestamp": "2026-02-28T12:00:00Z",
+  "description": "The user registration test suite is failing because the email validation regex rejects valid email addresses that contain a '+' character (e.g., user+tag@example.com). Several users have reported they cannot register with their Gmail plus-addressing emails.",
+  "steps_to_reproduce": [
+    "Run: npm test",
+    "Observe test 'should accept valid email with plus addressing' fails",
+    "Try registering with email 'user+test@gmail.com' via the API",
+    "Receive 400 error: 'Invalid email format'"
+  ],
+  "error_log": "FAIL tests/auth.test.js\n  User Registration\n    ✓ should register user with valid data (45ms)\n    ✗ should accept valid email with plus addressing (12ms)\n      Expected: 201\n      Received: 400\n    ✓ should reject registration without password (8ms)\n    ✗ should accept valid email with dots (10ms)\n      Expected: 201\n      Received: 400",
+  "expected_behavior": "Email validation accepts all RFC 5322 compliant email addresses including those with + and multiple dots",
+  "actual_behavior": "Email regex is too restrictive, rejecting valid emails with + characters and consecutive dots",
+  "recent_changes": "Custom email validation was added to replace express-validator's built-in isEmail()",
+  "tags": ["test-failure", "validation", "regex"]
+}
