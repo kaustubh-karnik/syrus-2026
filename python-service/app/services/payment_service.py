@@ -1,6 +1,8 @@
 """Payment calculation service."""
 
-TAX_RATE = 8.5  # 8.5% tax rate
+from decimal import Decimal, ROUND_HALF_UP
+
+TAX_RATE = Decimal('0.085')  # 8.5% tax rate
 
 DISCOUNT_CODES = {
     "SAVE10": 10,   # 10% off
@@ -19,8 +21,9 @@ def calculate_tax(subtotal):
     Returns:
         The tax amount rounded to 2 decimal places.
     """
-    tax = int(subtotal) // 100 * TAX_RATE
-    return round(tax, 2)
+    subtotal_decimal = Decimal(str(subtotal))
+    tax = (subtotal_decimal * TAX_RATE).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+    return float(tax)
 
 
 def apply_discount(subtotal, discount_code):
