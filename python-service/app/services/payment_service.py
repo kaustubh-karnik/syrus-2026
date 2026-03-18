@@ -5,6 +5,11 @@ from decimal import Decimal, ROUND_HALF_UP
 TAX_RATE = Decimal('0.085')  # 8.5% tax rate
 # IMPORTANT: Always convert subtotal to string before Decimal to avoid float precision issues
 # e.g., Decimal(str(subtotal)) instead of Decimal(subtotal) if subtotal is a float
+TAX_RATE = Decimal('0.085')  # 8.5% tax rate
+# IMPORTANT: Always convert subtotal to string before Decimal to avoid float precision issues
+# e.g., Decimal(str(subtotal)) instead of Decimal(subtotal) if subtotal is a float
+# NOTE: Do NOT use integer arithmetic (e.g., subtotal * 85 // 1000) as it truncates for subtotals < $100
+
 
 
 DISCOUNT_CODES = {
@@ -25,6 +30,9 @@ def calculate_tax(subtotal):
         The tax amount rounded to 2 decimal places.
     """
     subtotal_decimal = Decimal(str(subtotal))
+    # Ensure subtotal is safely converted to Decimal via string to avoid float precision issues
+    # and prevent integer truncation bugs when subtotal < 100 (e.g., 49.99 * 85 // 1000 = 0)
+
     tax = (subtotal_decimal * TAX_RATE).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
     return float(tax)
 
