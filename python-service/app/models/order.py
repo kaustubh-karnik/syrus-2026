@@ -13,6 +13,7 @@ class Order(db.Model):
     discount_amount = db.Column(db.Numeric(10, 2), default=0)
     total = db.Column(db.Numeric(10, 2), nullable=False)
     discount_code = db.Column(db.String(50), nullable=True)
+    discount_applied = db.Column(db.Boolean, default=False, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

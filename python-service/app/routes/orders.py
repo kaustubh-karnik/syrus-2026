@@ -97,6 +97,7 @@ def create_order():
         discount_amount=discount_amount,
         total=total,
         discount_code=discount_code,
+        discount_applied=True,
     )
     db.session.add(order)
     db.session.flush()
