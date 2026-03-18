@@ -35,12 +35,12 @@ class DevelopmentConfig(BaseConfig):
 
 class StagingConfig(BaseConfig):
     DEBUG = False
-    SQLALCHEMY_DATABASE_URI = _build_postgres_uri(default_host="localhost")
+    SQLALCHEMY_DATABASE_URI = _build_postgres_uri(default_host="")
 
 
 class ProductionConfig(BaseConfig):
     DEBUG = False
-    SQLALCHEMY_DATABASE_URI = _build_postgres_uri(default_host="localhost")
+    SQLALCHEMY_DATABASE_URI = _build_postgres_uri(default_host="")
 
 
 class TestingConfig(BaseConfig):
