@@ -47,23 +47,11 @@ def search_products():
         return jsonify({"error": "Search query parameter 'q' is required"}), 400
 
     search_term = f"%{query}%"
-    results = db.session.execute(
-        db.text("SELECT * FROM products WHERE name LIKE :search_term OR description LIKE :search_term"),
-        {"search_term": search_term}
-    )
+    products = Product.query.filter(
+        Product.name.ilike(search_term) | Product.description.ilike(search_term)
+    ).all()
 
-    products = []
-    for row in results:
-        products.append({
-            "id": row[0],
-            "name": row[1],
-            "description": row[2],
-            "price": float(row[3]),
-            "stock": row[4],
-            "category": row[5],
-        })
-
-    return jsonify({"products": products, "count": len(products)}), 200
+    return jsonify({"products": [p.to_dict() for p in products], "count": len(products)}), 200
 
 
 @products_bp.route("/", methods=["POST"])
