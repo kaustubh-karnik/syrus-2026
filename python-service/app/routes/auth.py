@@ -52,7 +52,7 @@ def login():
 
     is_valid = bcrypt.checkpw(
         data["password"].encode("utf-8"),
-        user.password_hash
+        user.password_hash.encode("utf-8")
     )
 
     if not is_valid:
