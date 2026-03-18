@@ -1,5 +1,13 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 from app import db
 from app.models.order import Order
@@ -57,9 +65,14 @@ def checkout():
     if order.status != "pending":
         return jsonify({"error": f"Order is already {order.status}"}), 400
 
+    # Discount should already be applied during order creation; do not re-apply here
+    # Verify discount consistency if present
+    if order.discount_code and not order.discount_applied:
+        logger.warning(f"Discount code {order.discount_code} not marked as applied for order {order.id}. This indicates a logic error in order creation.")
+
     # Simulate payment processing
     order.status = "paid"
-    logging.info(f"Payment processed for order {order.id}, total: {order.total}")
+    logger.info(f"Payment processed for order {order.id}, total: {order.total}")
     db.session.commit()
 
     return jsonify({
