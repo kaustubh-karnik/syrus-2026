@@ -1,6 +1,0 @@
-# PATCH METADATA
-# Ticket    : ST-12
-# File      : python-service\app\config.py
-# Timestamp : 20260314_144941
-# Rollback  : patch -R python-service\app\config.py ST-12_python-service_app_config.py_20260314_144941.diff
-#

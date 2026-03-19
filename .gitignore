@@ -1,35 +1,7 @@
-# Python
 __pycache__/
-*.py[cod]
-*$py.class
-*.so
+*.pyc
 venv/
-.env
-*.egg-info/
-dist/
-build/
-
-# Node
-node_modules/
-npm-debug.log*
-.env
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Testing
-.coverage
-htmlcov/
-coverage/
-.pytest_cache/
-
-# Docker
-*.log
+target-repos/
+working-copy/
+chroma_db/
+.syrus_cache/
