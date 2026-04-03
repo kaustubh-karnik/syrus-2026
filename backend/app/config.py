@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     OPENROUTER_API_KEY: Optional[str] = None
     OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
     OPENROUTER_MODEL: str = "qwen/qwen3-32b"
-    OPENROUTER_APP_NAME: str = "Syrus2026_LOVE_AT_FIRST_BYTE"
+    OPENROUTER_APP_NAME: str = "test"
     OPENROUTER_HTTP_REFERER: Optional[str] = None
     JIRA_URL: str
     JIRA_EMAIL: str
