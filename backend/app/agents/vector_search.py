@@ -1,4 +1,5 @@
 from pathlib import Path
+import sys
 
 from app.agents.state import AgentState
 from app.config import settings
@@ -9,6 +10,20 @@ from app.mcp.github_client import (
 )
 from app.retrieval.context_bundle import build_context_bundle
 from app.retrieval.failure_interpreter import interpret_failure
+
+
+def _safe_console_text(value: object) -> str:
+    text = str(value)
+    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+    try:
+        text.encode(encoding)
+        return text
+    except UnicodeEncodeError:
+        return text.encode(encoding, errors="replace").decode(encoding, errors="replace")
+
+
+def _log(message: object) -> None:
+    print(_safe_console_text(message))
 
 
 def _resolve_github_binding(repo_root: Path, commit_sha: str | None) -> dict:
@@ -70,7 +85,7 @@ def _discover_mcp_signals(
             "source": "unavailable",
         }
 
-    print(
+    _log(
         "   MCP binding : "
         f"{binding['owner']}/{binding['repo']} @ {binding['ref']} ({binding['source']})"
     )
@@ -156,10 +171,10 @@ def vector_search_node(state: AgentState) -> AgentState:
 
     likely_files = [str(item) for item in (state.get("likely_files") or []) if item]
 
-    print("\nRepository Retrieval: assembling grounded file pack...")
-    print(f"   Repo        : {repo_root}")
-    print(f"   Terms       : {terms}")
-    print(f"   Likely      : {likely_files}")
+    _log("\nRepository Retrieval: assembling grounded file pack...")
+    _log(f"   Repo        : {repo_root}")
+    _log(f"   Terms       : {terms}")
+    _log(f"   Likely      : {likely_files}")
 
     mcp_signals = _discover_mcp_signals(
         repo_root=repo_root,
@@ -168,9 +183,9 @@ def vector_search_node(state: AgentState) -> AgentState:
         commit_sha=state.get("commit_sha"),
     )
     if mcp_signals.get("candidate_paths"):
-        print(f"   MCP paths   : {mcp_signals.get('candidate_paths')[:6]}")
+        _log(f"   MCP paths   : {mcp_signals.get('candidate_paths')[:6]}")
     if mcp_signals.get("history_paths"):
-        print(f"   MCP history : {mcp_signals.get('history_paths')[:6]}")
+        _log(f"   MCP history : {mcp_signals.get('history_paths')[:6]}")
 
     retrieval_context = build_context_bundle(
         repo_root=repo_root,
@@ -204,20 +219,20 @@ def vector_search_node(state: AgentState) -> AgentState:
     repo_profile = retrieval_context.get("repo_profile") or {}
 
     if validation_plan.get("selected_test_paths") or validation_context.get("selected_test_paths"):
-        print(
+        _log(
             "   Test pack   : "
             f"{validation_plan.get('selected_test_paths') or validation_context.get('selected_test_paths')}"
         )
     if repo_state.get("commit_sha"):
-        print(
+        _log(
             "   Repo state  : "
             f"branch={repo_state.get('branch')} commit={repo_state.get('commit_sha')}"
         )
     if repo_profile.get("primary_service"):
-        print(f"   Profile     : {repo_profile.get('primary_service')}")
+        _log(f"   Profile     : {repo_profile.get('primary_service')}")
     coverage = retrieval_context.get("evidence_coverage") or {}
     if coverage:
-        print(
+        _log(
             "   Evidence    : "
             f"score={coverage.get('score')} stack={coverage.get('top_stack_frame_included')} "
             f"tests={coverage.get('validation_targets_included')} symbols={coverage.get('suspect_symbol_included')}"

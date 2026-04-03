@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from jira.exceptions import JIRAError
 from pydantic import BaseModel
@@ -15,10 +16,19 @@ from app.agents.pipeline import run_pipeline_sequential, run_pipeline_with_retri
 from app.agents.ticket_analyzer import ticket_analyzer_node
 from app.agents.vector_search import vector_search_node
 from app.config import settings
+from app.mcp.github_client import GitHubMCPClient
 from app.mcp.jira_client import JiraMCPClient
 from app.services.ticket_service import TicketService
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.frontend_cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 ticket_service = TicketService()
 
@@ -70,6 +80,14 @@ def _build_jira_client() -> JiraMCPClient:
         api_token=settings.JIRA_API_TOKEN,
         project_key=settings.JIRA_PROJECT_KEY,
         excluded_ticket_keys=settings.jira_excluded_ticket_keys,
+    )
+
+
+def _build_github_client() -> GitHubMCPClient:
+    return GitHubMCPClient(
+        github_token=settings.GITHUB_TOKEN,
+        mcp_server_command=settings.GITHUB_MCP_SERVER_COMMAND,
+        mcp_server_args=settings.GITHUB_MCP_SERVER_ARGS,
     )
 
 
@@ -166,6 +184,21 @@ def clone_repo(request: CloneRepoRequest):
     if result.get("status") == "error":
         raise HTTPException(status_code=400, detail=result)
     return result
+
+
+@app.get("/github/repositories/{owner}/{repo}/overview")
+def github_repository_overview(owner: str, repo: str):
+    """Fetch repository overview through GitHub MCP (with backend fallback for resilience)."""
+    try:
+        client = _build_github_client()
+        return client.get_repository_overview(owner=owner, repo=repo)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"message": str(exc)}) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={"message": "Failed to load repository overview", "error": str(exc)},
+        ) from exc
 
 
 @app.post("/analyze/{ticket_key}")

@@ -5,3 +5,9 @@ target-repos/
 working-copy/
 chroma_db/
 .syrus_cache/
+
+# Next.js / React frontend artifacts
+node_modules/
+.next/
+out/
+dist/

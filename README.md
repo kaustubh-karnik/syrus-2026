@@ -1,129 +1,88 @@
-# LOVE-AT-FIRST-BYTE
+# Syrus 2026 Test Repo
 
-## PS-02: Autonomous Incident-to-Fix Engineering Agent  
-**Track:** REZINIX AI
+## Start the project
 
----
+### 1) Start backend (FastAPI)
 
-## UPDATED Demo Video
-https://youtu.be/Zt_LsdGm2bo
+From the repository root:
 
----
+1. Go to backend folder
+2. Create/activate virtual environment
+3. Install Python dependencies
+4. Start backend server
 
-## UPDATED PPT LINK
-https://drive.google.com/file/d/1OiCrUJyG_DIxWZqjnzlJAxDTlml1EwO9/view?usp=sharing
-
----
-
-## 1-PAGE SUMMARY DOC
-https://drive.google.com/file/d/1hLrCwh7BtA3ZukWPtN1O7Po5rbuNzfQ9/view?usp=sharing
-
-## Project Overview
-
-Modern engineering teams rely on platforms such as GitHub, CI/CD pipelines, and issue trackers like Jira or Slack to manage production systems. While these tools help detect failures, resolving incidents still requires significant manual effort.
-
-When a bug occurs, engineers must read incident tickets, inspect logs, explore the codebase, identify the root cause, implement fixes, and validate them through testing. As systems grow more complex and deployment cycles become faster, this process becomes slow and difficult to scale.
-
-Our project introduces an **Agentic Engineering Platform** that automates the entire incident resolution workflow. The system acts as an **AI-powered engineering assistant** capable of understanding incident tickets, analyzing the codebase, generating fixes, applying patches, and validating them through automated tests.
-
----
-
-## Problem Statement
-
-Build an **Agentic Engineering Platform** that autonomously resolves software incidents — from interpreting natural language tickets to applying verified fixes and generating production-ready changes.
-
----
-
-## Solution
-
-We developed an **Autonomous Incident-to-Fix Agent** that performs the complete debugging lifecycle automatically.
-
-The system:
-
-- Interprets incident tickets using LLMs  
-- Retrieves relevant code from the repository  
-- Identifies the root cause of the issue  
-- Generates minimal code fixes  
-- Applies patches to the repository  
-- Validates fixes using automated tests in a sandbox environment  
-- Generates a structured resolution report  
-
-This approach reduces **manual debugging**, speeds up **incident resolution**, and improves **developer productivity**.
-
----
-
-## System Architecture
-
-The system follows a modular agent workflow:
-
+```bash
+cd backend
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r ..\requirements.txt
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
-Incident Ticket
-      ↓
-Ticket Analyzer
-      ↓
-Vector Search
-      ↓
-Fix Generator
-      ↓
-Patch Applier
-      ↓
-Sandbox Validation
-      ↓
-Resolution Explanation
+
+Backend URL: `http://127.0.0.1:8000`
+
+---
+
+### 2) Start frontend (Next.js)
+
+Open a new terminal from repository root:
+
+1. Go to Next.js frontend folder
+2. Install Node dependencies
+3. Start dev server
+
+```bash
+cd frontend/nextjs
+npm install
+npm run dev
+```
+
+Frontend URL: `http://localhost:3000`
+
+---
+
+### 3) Required environment setup
+
+- Backend reads env from root `.env`
+- Frontend reads env from `frontend/nextjs/.env.local`
+
+Minimum required frontend variable:
+
+```env
+NEXT_PUBLIC_BACKEND_BASE_URL=http://127.0.0.1:8000
 ```
 
 ---
 
-## Key Features
+## Architecture overview
 
-**Intelligent Incident Understanding**  
-Uses LLMs to interpret incident tickets and extract important debugging information.
+This project follows a **Backend + Frontend + Agent Pipeline** architecture.
 
-**Automated Codebase Analysis**  
-Uses vector search over repository embeddings to retrieve relevant code sections.
+### A) Backend (`backend/app`)
 
-**Autonomous Fix Generation**  
-Automatically generates minimal and safe code fixes.
+- **API layer (FastAPI):** `backend/app/main.py`
+  - Exposes endpoints for ticket fetch, repository clone, pipeline run, run history, and GitHub overview.
+- **Agent workflow:** `backend/app/agents/`
+  - Ticket analysis, vector retrieval, fix generation, patching, sandbox/test execution, pipeline orchestration.
+- **Integrations (MCP/clients):** `backend/app/mcp/`
+  - GitHub + Jira integrations.
+- **Retrieval subsystem:** `backend/app/retrieval/`
+  - Context bundling, repo profiling, graph/symbol helpers, validation planning.
 
-**Safe Patch Application**  
-Applies generated patches directly to the repository.
+### B) Frontend (`frontend/nextjs`)
 
-**Sandbox-Based Validation**  
-Runs automated tests in an isolated environment to verify the fix and prevent regressions.
+- **UI layer (Next.js + React):** `src/app/page.tsx`
+  - Mission-control dashboard for repository ingest, incident loading, pipeline execution, and report viewing.
+- **API client layer:** `src/lib/api.ts`
+  - Calls backend endpoints.
+- **Shared contracts:** `src/lib/types.ts`
+  - Request/response data models used by UI.
 
-**Resolution Reporting**  
-Generates a structured explanation including root cause, changes made, and validation results.
+### C) End-to-end execution flow
 
----
-
-## Repository Used for Testing
-
-The system operates on the following repository:
-
-https://github.com/Rezinix-AI/shopstack-platform
-
-This repository simulates a microservices application with intentionally introduced bugs and test cases.
-
----
-
-## Technology Stack
-
-- LangGraph  
-- Large Language Models (LLMs)  
-- Supabase + pgvector  
-- Streamlit  
-- Docker  
-- Python / Node.js  
-
----
-
-## Workflow
-
-1. User provides a GitHub repository link  
-2. Repository is indexed and embedded  
-3. Incident ticket is analyzed  
-4. Relevant code is retrieved  
-5. AI generates a fix  
-6. Patch is applied  
-7. Tests run inside a sandbox  
-8. A validated fix and explanation are produced  
+1. User ingests a repository from frontend.
+2. Frontend calls backend clone/index endpoints.
+3. User loads/syncs incidents (Jira/manual).
+4. Frontend starts pipeline (`/pipeline/solve-all-bugs`).
+5. Backend runs ticket-to-fix agent pipeline and streams logs.
+6. Frontend fetches final run report (`/pipeline/last-run`) and renders root cause, changes, and validation results.

@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     REPOS_BASE_DIR: Optional[str] = None
     TARGET_REPO_ID: Optional[str] = None
     TARGET_REPO_COMMIT_SHA: Optional[str] = None
-    TARGET_REPO_PATH: str = r"C:\Users\Kaustubh\kk\Coding\syrus-2026"
+    TARGET_REPO_PATH: str = r"C:\Users\Kaustubh\kk\Coding\syrus-2026-project"
     GITHUB_TOKEN: Optional[str] = None
     GITHUB_REPO: Optional[str] = None
     GITHUB_BASE_BRANCH: Optional[str] = None
@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     AUTO_RUN_DOCKER_AFTER_CLONE: bool = True
     DOCKER_AUTOHEAL_MAX_CYCLES: int = 6
     DOCKER_AUTOHEAL_FIX_ATTEMPTS: int = 6
+    FRONTEND_CORS_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000"
 
     model_config = SettingsConfigDict(
         env_file=str(PROJECT_ROOT / ".env"),
@@ -57,6 +58,11 @@ class Settings(BaseSettings):
     def jira_excluded_ticket_keys(self) -> list[str]:
         raw_value = str(self.JIRA_EXCLUDED_TICKET_KEYS or "")
         return [item.strip().upper() for item in raw_value.split(",") if item.strip()]
+
+    @property
+    def frontend_cors_origins(self) -> list[str]:
+        raw_value = str(self.FRONTEND_CORS_ORIGINS or "")
+        return [item.strip() for item in raw_value.split(",") if item.strip()]
 
 settings = Settings()
 

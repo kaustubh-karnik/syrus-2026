@@ -5,6 +5,9 @@ import shlex
 import shutil
 import stat
 import subprocess
+import base64
+import binascii
+from collections import Counter
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Tuple
@@ -161,6 +164,490 @@ class GitHubMCPClient:
         self.github_token = github_token
         self.mcp_server_command = str(mcp_server_command or "npx")
         self.mcp_server_args = shlex.split(mcp_server_args or "")
+
+    @staticmethod
+    def _walk_nodes(payload: Any):
+        stack: list[Any] = [payload]
+        while stack:
+            current = stack.pop()
+            yield current
+            if isinstance(current, dict):
+                stack.extend(current.values())
+            elif isinstance(current, list):
+                stack.extend(current)
+
+    @staticmethod
+    def _parse_json_from_text(text: str) -> Any:
+        parsed = _maybe_parse_json_text(text)
+        if parsed is not None:
+            return parsed
+
+        fenced_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text)
+        if fenced_match:
+            parsed = _maybe_parse_json_text(fenced_match.group(1).strip())
+            if parsed is not None:
+                return parsed
+
+        return None
+
+    @classmethod
+    def _response_payloads(cls, response: Any) -> List[Any]:
+        payloads: List[Any] = []
+        for item in getattr(response, "content", []):
+            if getattr(item, "type", "") != "text":
+                continue
+            text = getattr(item, "text", "") or ""
+            parsed = cls._parse_json_from_text(text)
+            if parsed is not None:
+                payloads.append(parsed)
+        return payloads
+
+    @classmethod
+    def _extract_repository_metadata(cls, payload: Any, owner: str, repo: str) -> Dict[str, Any]:
+        target_full_name = f"{owner}/{repo}".lower()
+        candidates: list[dict[str, Any]] = []
+
+        for node in cls._walk_nodes(payload):
+            if not isinstance(node, dict):
+                continue
+            if any(key in node for key in ["full_name", "name", "default_branch", "stargazers_count"]):
+                candidates.append(node)
+
+        if not candidates:
+            return {}
+
+        def score(item: dict[str, Any]) -> int:
+            full_name = str(item.get("full_name") or item.get("fullName") or "").lower()
+            name = str(item.get("name") or "").lower()
+            owner_obj = item.get("owner")
+            owner_login = ""
+            if isinstance(owner_obj, dict):
+                owner_login = str(owner_obj.get("login") or "").lower()
+            elif isinstance(owner_obj, str):
+                owner_login = owner_obj.lower()
+
+            current = 0
+            if full_name == target_full_name:
+                current += 120
+            if name == repo.lower():
+                current += 35
+            if owner_login == owner.lower():
+                current += 25
+            if item.get("default_branch") is not None:
+                current += 10
+            if item.get("html_url") is not None:
+                current += 5
+            return current
+
+        best = max(candidates, key=score)
+
+        return {
+            "name": best.get("name") or repo,
+            "full_name": best.get("full_name") or best.get("fullName") or f"{owner}/{repo}",
+            "description": best.get("description"),
+            "html_url": best.get("html_url"),
+            "stargazers_count": best.get("stargazers_count") or 0,
+            "forks_count": best.get("forks_count") or 0,
+            "watchers_count": best.get("watchers_count") or 0,
+            "open_issues_count": best.get("open_issues_count") or 0,
+            "language": best.get("language"),
+            "default_branch": best.get("default_branch") or "main",
+            "pushed_at": best.get("pushed_at"),
+        }
+
+    @classmethod
+    def _extract_branches(cls, payload: Any) -> List[Dict[str, Any]]:
+        branches: list[dict[str, Any]] = []
+        seen = set()
+
+        for node in cls._walk_nodes(payload):
+            if not isinstance(node, dict):
+                continue
+
+            name_value = node.get("name")
+            ref_value = node.get("ref")
+            protected_value = bool(node.get("protected", False))
+
+            branch_name: Optional[str] = None
+            if isinstance(name_value, str) and name_value.strip():
+                branch_name = name_value.strip()
+            elif isinstance(ref_value, str) and ref_value.startswith("refs/heads/"):
+                branch_name = ref_value.split("refs/heads/", 1)[1].strip()
+
+            if not branch_name:
+                continue
+
+            if branch_name in seen:
+                continue
+
+            seen.add(branch_name)
+            branches.append({"name": branch_name, "protected": protected_value})
+
+        return branches
+
+    @classmethod
+    def _extract_contributors(cls, payload: Any) -> List[Dict[str, Any]]:
+        contributors: list[dict[str, Any]] = []
+        seen = set()
+
+        for node in cls._walk_nodes(payload):
+            if not isinstance(node, dict):
+                continue
+
+            login = node.get("login")
+            contributions = node.get("contributions")
+            html_url = node.get("html_url")
+
+            if not isinstance(login, str) or not login.strip():
+                continue
+
+            normalized = login.strip()
+            if normalized in seen:
+                continue
+
+            seen.add(normalized)
+            contributors.append(
+                {
+                    "login": normalized,
+                    "contributions": int(contributions) if isinstance(contributions, int) else 0,
+                    "html_url": html_url if isinstance(html_url, str) else None,
+                }
+            )
+
+        return contributors
+
+    @staticmethod
+    def _decode_base64_if_needed(content: str, encoding: Optional[str]) -> str:
+        normalized_encoding = str(encoding or "").lower().strip()
+        if normalized_encoding != "base64":
+            return content
+
+        try:
+            decoded = base64.b64decode(content, validate=False)
+            return decoded.decode("utf-8", errors="replace")
+        except (ValueError, binascii.Error):
+            return content
+
+    @classmethod
+    def _extract_readme_content(cls, payload: Any) -> Optional[str]:
+        for node in cls._walk_nodes(payload):
+            if not isinstance(node, dict):
+                continue
+
+            content = node.get("content")
+            if not isinstance(content, str):
+                continue
+
+            path = str(node.get("path") or "").lower()
+            if path and "readme" not in path:
+                continue
+
+            decoded = cls._decode_base64_if_needed(content, node.get("encoding"))
+            cleaned = decoded.strip()
+            if cleaned:
+                return cleaned
+
+        return None
+
+    def _rest_fallback_repository_overview(self, owner: str, repo: str) -> Dict[str, Any]:
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+        if self.github_token:
+            headers["Authorization"] = f"Bearer {self.github_token}"
+
+        def get_json(url: str) -> Any:
+            response = requests.get(url, headers=headers, timeout=20)
+
+            # If configured auth token is invalid/expired, retry as anonymous for public repositories.
+            if response.status_code in {401, 403} and "Authorization" in headers:
+                anonymous_headers = {key: value for key, value in headers.items() if key.lower() != "authorization"}
+                retry_response = requests.get(url, headers=anonymous_headers, timeout=20)
+                if retry_response.status_code < 400:
+                    return retry_response.json()
+                response = retry_response
+
+            if response.status_code >= 400:
+                error_message = ""
+                try:
+                    payload = response.json()
+                    if isinstance(payload, dict):
+                        error_message = str(payload.get("message") or "")
+                except Exception:
+                    error_message = ""
+
+                suffix = f" - {error_message}" if error_message else ""
+                raise RuntimeError(f"GitHub API request failed ({response.status_code}): {url}{suffix}")
+            return response.json()
+
+        repo_payload = get_json(f"https://api.github.com/repos/{owner}/{repo}")
+        branches_payload = get_json(f"https://api.github.com/repos/{owner}/{repo}/branches?per_page=100")
+        contributors_payload = get_json(f"https://api.github.com/repos/{owner}/{repo}/contributors?per_page=12")
+
+        readme_text: Optional[str] = None
+        try:
+            readme_payload = get_json(f"https://api.github.com/repos/{owner}/{repo}/readme")
+            raw_content = str(readme_payload.get("content") or "")
+            readme_text = self._decode_base64_if_needed(raw_content, readme_payload.get("encoding"))
+        except Exception:
+            readme_text = None
+
+        branches: list[dict[str, Any]] = []
+        for item in branches_payload if isinstance(branches_payload, list) else []:
+            if not isinstance(item, dict):
+                continue
+            branch_name = item.get("name")
+            if not isinstance(branch_name, str) or not branch_name.strip():
+                continue
+            branches.append({"name": branch_name.strip(), "protected": bool(item.get("protected", False))})
+
+        contributors: list[dict[str, Any]] = []
+        for item in contributors_payload if isinstance(contributors_payload, list) else []:
+            if not isinstance(item, dict):
+                continue
+            login = item.get("login")
+            if not isinstance(login, str) or not login.strip():
+                continue
+            contributors.append(
+                {
+                    "login": login.strip(),
+                    "contributions": int(item.get("contributions") or 0),
+                    "html_url": item.get("html_url"),
+                }
+            )
+
+        return {
+            "source": "github-rest-fallback",
+            "owner": owner,
+            "repo": repo,
+            "name": repo_payload.get("name") or repo,
+            "full_name": repo_payload.get("full_name") or f"{owner}/{repo}",
+            "description": repo_payload.get("description"),
+            "html_url": repo_payload.get("html_url"),
+            "stargazers_count": int(repo_payload.get("stargazers_count") or 0),
+            "forks_count": int(repo_payload.get("forks_count") or 0),
+            "watchers_count": int(repo_payload.get("watchers_count") or 0),
+            "open_issues_count": int(repo_payload.get("open_issues_count") or 0),
+            "language": repo_payload.get("language"),
+            "default_branch": repo_payload.get("default_branch") or "main",
+            "pushed_at": repo_payload.get("pushed_at"),
+            "branches": branches,
+            "contributors": contributors,
+            "readme": readme_text,
+        }
+
+    async def _get_repository_overview_async(self, owner: str, repo: str) -> Dict[str, Any]:
+        try:
+            from mcp import ClientSession, StdioServerParameters
+            from mcp.client.stdio import stdio_client
+        except Exception as exc:
+            raise RuntimeError(f"Python MCP client package not available: {exc}")
+
+        if not self.github_token:
+            raise RuntimeError("GITHUB_TOKEN not configured")
+
+        env = os.environ.copy()
+        env["GITHUB_TOKEN"] = self.github_token
+        env["GITHUB_PERSONAL_ACCESS_TOKEN"] = self.github_token
+
+        params = StdioServerParameters(
+            command=self.mcp_server_command,
+            args=self.mcp_server_args,
+            env=env,
+        )
+
+        repository_data: Dict[str, Any] = {}
+        branches: List[Dict[str, Any]] = []
+        contributors: List[Dict[str, Any]] = []
+        readme_text: Optional[str] = None
+        available_tools: List[str] = []
+
+        async with stdio_client(params) as (read_stream, write_stream):
+            async with ClientSession(read_stream, write_stream) as session:
+                await session.initialize()
+                listed = await session.list_tools()
+                tool_names = {tool.name for tool in listed.tools}
+                available_tools = sorted(tool_names)
+
+                repository_calls = []
+                if "get_repository" in tool_names:
+                    repository_calls.append(("get_repository", {"owner": owner, "repo": repo}))
+                if "search_repositories" in tool_names:
+                    repository_calls.extend(
+                        [
+                            ("search_repositories", {"query": f"{owner}/{repo}", "perPage": 1}),
+                            ("search_repositories", {"query": f"repo:{owner}/{repo}", "perPage": 1}),
+                            ("search_repositories", {"q": f"repo:{owner}/{repo}", "per_page": 1}),
+                        ]
+                    )
+
+                for tool_name, args in repository_calls:
+                    try:
+                        response = await session.call_tool(tool_name, args)
+                    except Exception:
+                        continue
+
+                    for payload in self._response_payloads(response):
+                        repository_data = self._extract_repository_metadata(payload, owner, repo)
+                        if repository_data:
+                            break
+
+                    if repository_data:
+                        break
+
+                branch_tools = [name for name in ["list_branches", "get_branches", "list_refs"] if name in tool_names]
+                for tool_name in branch_tools:
+                    arg_candidates = [
+                        {"owner": owner, "repo": repo, "perPage": 100},
+                        {"owner": owner, "repo": repo, "per_page": 100},
+                        {"owner": owner, "repo": repo},
+                    ]
+                    if tool_name == "list_refs":
+                        arg_candidates = [
+                            {"owner": owner, "repo": repo, "ref": "heads", "perPage": 100},
+                            {"owner": owner, "repo": repo, "namespace": "heads"},
+                        ]
+
+                    for args in arg_candidates:
+                        try:
+                            response = await session.call_tool(tool_name, args)
+                        except Exception:
+                            continue
+                        extracted: list[dict[str, Any]] = []
+                        for payload in self._response_payloads(response):
+                            extracted.extend(self._extract_branches(payload))
+                        if extracted:
+                            deduped = {item["name"]: item for item in extracted}
+                            branches = sorted(deduped.values(), key=lambda item: item["name"].lower())
+                            break
+                    if branches:
+                        break
+
+                contributor_tools = [name for name in ["list_contributors", "list_commits"] if name in tool_names]
+                for tool_name in contributor_tools:
+                    arg_candidates = [
+                        {"owner": owner, "repo": repo, "perPage": 20},
+                        {"owner": owner, "repo": repo, "per_page": 20},
+                        {"owner": owner, "repo": repo},
+                    ]
+                    for args in arg_candidates:
+                        try:
+                            response = await session.call_tool(tool_name, args)
+                        except Exception:
+                            continue
+
+                        payloads = self._response_payloads(response)
+                        if tool_name == "list_contributors":
+                            extracted: list[dict[str, Any]] = []
+                            for payload in payloads:
+                                extracted.extend(self._extract_contributors(payload))
+                            if extracted:
+                                contributors = sorted(extracted, key=lambda item: item.get("contributions", 0), reverse=True)
+                                break
+                        else:
+                            author_counter: Counter[str] = Counter()
+                            author_urls: dict[str, Optional[str]] = {}
+                            for payload in payloads:
+                                for node in self._walk_nodes(payload):
+                                    if not isinstance(node, dict):
+                                        continue
+                                    author = node.get("author")
+                                    if isinstance(author, dict):
+                                        login = str(author.get("login") or "").strip()
+                                        if login:
+                                            author_counter[login] += 1
+                                            html_url = author.get("html_url")
+                                            author_urls[login] = str(html_url) if isinstance(html_url, str) else None
+                                            continue
+                                    commit = node.get("commit")
+                                    if isinstance(commit, dict):
+                                        commit_author = commit.get("author")
+                                        if isinstance(commit_author, dict):
+                                            fallback_name = str(commit_author.get("name") or "").strip()
+                                            if fallback_name:
+                                                author_counter[fallback_name] += 1
+
+                            if author_counter:
+                                contributors = [
+                                    {
+                                        "login": login,
+                                        "contributions": count,
+                                        "html_url": author_urls.get(login),
+                                    }
+                                    for login, count in author_counter.most_common(12)
+                                ]
+                                break
+
+                    if contributors:
+                        break
+
+                if "get_file_contents" in tool_names:
+                    readme_paths = ["README.md", "readme.md", "README.MD"]
+                    preferred_branch = str(repository_data.get("default_branch") or "main")
+                    ref_candidates = [preferred_branch, "main", "master"]
+                    seen_refs = set()
+                    unique_refs = []
+                    for ref in ref_candidates:
+                        ref_name = str(ref or "").strip()
+                        if not ref_name or ref_name in seen_refs:
+                            continue
+                        seen_refs.add(ref_name)
+                        unique_refs.append(ref_name)
+
+                    for readme_path in readme_paths:
+                        if readme_text:
+                            break
+                        for ref_name in unique_refs:
+                            args_variants = [
+                                {"owner": owner, "repo": repo, "path": readme_path, "ref": ref_name},
+                                {"owner": owner, "repo": repo, "path": readme_path},
+                            ]
+                            for args in args_variants:
+                                try:
+                                    response = await session.call_tool("get_file_contents", args)
+                                except Exception:
+                                    continue
+                                for payload in self._response_payloads(response):
+                                    readme_text = self._extract_readme_content(payload)
+                                    if readme_text:
+                                        break
+                                if readme_text:
+                                    break
+                            if readme_text:
+                                break
+
+        if not repository_data:
+            raise RuntimeError("GitHub MCP did not return repository metadata")
+
+        if not branches and repository_data.get("default_branch"):
+            branches = [{"name": str(repository_data["default_branch"]), "protected": False}]
+
+        return {
+            "source": "github-mcp",
+            "owner": owner,
+            "repo": repo,
+            **repository_data,
+            "branches": branches,
+            "contributors": contributors[:12],
+            "readme": (readme_text[:6000] if readme_text else None),
+            "tools": available_tools,
+        }
+
+    def get_repository_overview(self, owner: str, repo: str) -> Dict[str, Any]:
+        import asyncio
+
+        owner_name = str(owner or "").strip()
+        repo_name = str(repo or "").strip()
+        if not owner_name or not repo_name:
+            raise ValueError("owner and repo are required")
+
+        try:
+            return asyncio.run(self._get_repository_overview_async(owner_name, repo_name))
+        except Exception:
+            fallback = self._rest_fallback_repository_overview(owner_name, repo_name)
+            fallback["source"] = "github-mcp->github-rest-fallback"
+            return fallback
 
     def _run_checked(self, cmd: list[str], cwd: str) -> str:
         result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace")
