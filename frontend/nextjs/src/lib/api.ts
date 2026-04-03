@@ -114,6 +114,17 @@ export async function getLastPipelineRun(baseUrl: string): Promise<LastPipelineR
   return (await response.json()) as LastPipelineRunResponse;
 }
 
+export async function stopPipelineRun(baseUrl: string): Promise<Record<string, unknown>> {
+  const endpoint = `${normalizeBaseUrl(baseUrl)}/pipeline/stop`;
+  const response = await fetch(endpoint, { method: "POST" });
+
+  if (!response.ok) {
+    throw await parseError(response);
+  }
+
+  return (await response.json()) as Record<string, unknown>;
+}
+
 export async function getGithubRepositoryOverview(
   baseUrl: string,
   owner: string,

@@ -1,6 +1,7 @@
 import json
 import subprocess
 import sys
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -42,7 +43,14 @@ _pipeline_run_state: dict = {
     "exitCode": None,
     "logs": "",
     "report": None,
+    "stopRequested": False,
+    "stopReason": None,
+    "wasStopped": False,
 }
+_pipeline_lock = threading.Lock()
+_pipeline_process: Optional[subprocess.Popen] = None
+_pipeline_stop_requested = False
+_pipeline_stop_reason: Optional[str] = None
 
 
 class CloneRepoRequest(BaseModel):
@@ -104,7 +112,10 @@ def get_ticket(ticket_id: str):
 @app.post("/pipeline/solve-all-bugs")
 def solve_all_bugs_stream():
     """Run backend test_pipeline.py and stream logs line-by-line."""
-    if _pipeline_run_state.get("status") == "running":
+    global _pipeline_stop_requested
+    global _pipeline_stop_reason
+
+    if _pipeline_run_state.get("status") in {"running", "stopping"}:
         raise HTTPException(status_code=409, detail={"message": "A pipeline run is already in progress"})
 
     backend_root = Path(__file__).resolve().parents[1]
@@ -121,10 +132,21 @@ def solve_all_bugs_stream():
             "exitCode": None,
             "logs": "",
             "report": None,
+            "stopRequested": False,
+            "stopReason": None,
+            "wasStopped": False,
         }
     )
 
+    with _pipeline_lock:
+        _pipeline_stop_requested = False
+        _pipeline_stop_reason = None
+
     def _stream():
+        global _pipeline_process
+        global _pipeline_stop_requested
+        global _pipeline_stop_reason
+
         logs: list[str] = []
         return_code = 1
         process = None
@@ -139,6 +161,13 @@ def solve_all_bugs_stream():
                 errors="replace",
                 bufsize=1,
             )
+            with _pipeline_lock:
+                _pipeline_process = process
+                stop_now = _pipeline_stop_requested
+
+            if stop_now and process.poll() is None:
+                process.terminate()
+
             if process.stdout is None:
                 raise RuntimeError("Failed to open pipeline stdout stream")
 
@@ -152,17 +181,32 @@ def solve_all_bugs_stream():
             logs.append(error_line)
             yield error_line
         finally:
+            with _pipeline_lock:
+                was_stop_requested = _pipeline_stop_requested
+                stop_reason = _pipeline_stop_reason
+                _pipeline_process = None
+                _pipeline_stop_requested = False
+                _pipeline_stop_reason = None
+
+            if was_stop_requested:
+                stop_line = f"\n[SYSTEM] Pipeline stop requested: {stop_reason or 'Stopped by user'}\n"
+                logs.append(stop_line)
+
             full_logs = "".join(logs)
             finished_at = datetime.utcnow().isoformat() + "Z"
             report = _extract_pipeline_report(full_logs)
+            final_status = "stopped" if was_stop_requested else ("completed" if return_code == 0 else "failed")
             _pipeline_run_state.update(
                 {
-                    "status": "completed" if return_code == 0 else "failed",
+                    "status": final_status,
                     "startedAt": started_at,
                     "finishedAt": finished_at,
                     "exitCode": return_code,
                     "logs": full_logs,
                     "report": report,
+                    "stopRequested": False,
+                    "stopReason": stop_reason,
+                    "wasStopped": was_stop_requested,
                 }
             )
             if process is not None and process.poll() is None:
@@ -175,6 +219,38 @@ def solve_all_bugs_stream():
 def get_last_pipeline_run():
     """Return latest solve-all-bugs run details including logs and parsed report."""
     return _pipeline_run_state
+
+
+@app.post("/pipeline/stop")
+def stop_pipeline_run():
+    """Stop the currently running pipeline process."""
+    global _pipeline_stop_requested
+    global _pipeline_stop_reason
+
+    with _pipeline_lock:
+        if _pipeline_run_state.get("status") not in {"running", "stopping"}:
+            raise HTTPException(status_code=409, detail={"message": "No running pipeline to stop"})
+
+        _pipeline_stop_requested = True
+        _pipeline_stop_reason = "Stopped by user"
+        process = _pipeline_process
+        _pipeline_run_state["status"] = "stopping"
+        _pipeline_run_state["stopRequested"] = True
+        _pipeline_run_state["stopReason"] = _pipeline_stop_reason
+
+    if process is not None and process.poll() is None:
+        try:
+            process.terminate()
+        except Exception:
+            try:
+                process.kill()
+            except Exception:
+                pass
+
+    return {
+        "status": "stopping",
+        "message": "Pipeline stop requested",
+    }
 
 
 @app.post("/agent/clone-repo")

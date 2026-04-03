@@ -2,7 +2,7 @@
 
 import { CSSProperties, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
-import { ApiError, cloneRepository, getGithubRepositoryOverview, getLastPipelineRun, getTickets, streamPipelineLogs } from "@/lib/api";
+import { ApiError, cloneRepository, getGithubRepositoryOverview, getLastPipelineRun, getTickets, stopPipelineRun, streamPipelineLogs } from "@/lib/api";
 import { CloneRepoResponse, GithubRepositoryOverview, JiraTicket, LastPipelineRunResponse, PipelineReport, TicketReport } from "@/lib/types";
 import { coerceDescription, prettyJson, safeToString } from "@/lib/utils";
 
@@ -52,6 +52,14 @@ const PIPELINE_STEPS = [
     tag: "REPORT",
   },
 ] as const;
+
+const PATCH_STEP_INDEX = 3;
+const SANDBOX_STEP_INDEX = 4;
+const REPORT_STEP_INDEX = 5;
+
+function isCoupledPipelineStep(index: number): boolean {
+  return index === PATCH_STEP_INDEX || index === SANDBOX_STEP_INDEX;
+}
 
 type FeedbackTone = "success" | "error" | "info" | "warning";
 type StepStatus = "waiting" | "running" | "complete" | "failed";
@@ -189,7 +197,12 @@ function detectStepFromLog(line: string): number {
 function looksLikeFailure(line: string): boolean {
   const lower = line.toLowerCase();
   if (lower.includes("failed tests") && !lower.includes("failed tests: []")) return true;
-  return lower.includes("traceback") || lower.includes("exception") || lower.includes("status=failed") || lower.includes("error:");
+  if (lower.includes("traceback (most recent call last)")) return true;
+  if (/\[(error|fatal)\]/i.test(line)) return true;
+  if (lower.includes("status=failed")) return true;
+  if (lower.includes('"status":"failed"') || lower.includes('"status": "failed"')) return true;
+  if (lower.includes("pipeline failed")) return true;
+  return false;
 }
 
 function inferFailureType(text: string): string {
@@ -411,6 +424,7 @@ export default function DashboardPage() {
   const [pipelineMeta, setPipelineMeta] = useState<LastPipelineRunResponse | null>(null);
   const [pipelineReport, setPipelineReport] = useState<PipelineReport | null>(null);
   const [isRunningPipeline, setIsRunningPipeline] = useState(false);
+  const [isStoppingPipeline, setIsStoppingPipeline] = useState(false);
   const [pipelineFeedback, setPipelineFeedback] = useState<Feedback | null>(null);
   const [showDiffViewer, setShowDiffViewer] = useState(false);
   const [stepRuntime, setStepRuntime] = useState<StepRuntime[]>(() =>
@@ -466,7 +480,9 @@ export default function DashboardPage() {
       agent: isRunningPipeline ? "● Active" : "● Standby",
       repository: cloneReady ? "Connected" : "None",
       pipeline: isRunningPipeline
-        ? "Running"
+        ? isStoppingPipeline
+          ? "Stopping"
+          : "Running"
         : pipelineOutcome.hardFailed
           ? "Failed"
           : pipelineOutcome.hasTicketFailures
@@ -476,7 +492,7 @@ export default function DashboardPage() {
               : "Idle",
       queue: `${incidentQueue.length} ticket${incidentQueue.length === 1 ? "" : "s"}`,
     }),
-    [cloneReady, incidentQueue.length, isRunningPipeline, pipelineOutcome.hardFailed, pipelineOutcome.hasTicketFailures, pipelineReport],
+    [cloneReady, incidentQueue.length, isRunningPipeline, isStoppingPipeline, pipelineOutcome.hardFailed, pipelineOutcome.hasTicketFailures, pipelineReport],
   );
 
   const pseudoDiffLines = useMemo(() => pseudoDiffFromReport(pipelineReport), [pipelineReport]);
@@ -702,15 +718,62 @@ export default function DashboardPage() {
     setStepRuntime((previous) => {
       const now = Date.now();
       const next = previous.map((step) => ({ ...step }));
+      const completeStep = (index: number) => {
+        const startedAt = stepStartRef.current[index] ?? now;
+        stepStartRef.current[index] = startedAt;
+        next[index] = {
+          ...next[index],
+          status: "complete",
+          durationMs: Math.max(0, now - startedAt),
+        };
+      };
+
+      const completePatchSandboxPair = () => {
+        const startedAt = stepStartRef.current[PATCH_STEP_INDEX] ?? stepStartRef.current[SANDBOX_STEP_INDEX] ?? now;
+        stepStartRef.current[PATCH_STEP_INDEX] = startedAt;
+        stepStartRef.current[SANDBOX_STEP_INDEX] = startedAt;
+        const duration = Math.max(0, now - startedAt);
+
+        for (const index of [PATCH_STEP_INDEX, SANDBOX_STEP_INDEX]) {
+          if (next[index].status === "running") {
+            next[index] = {
+              ...next[index],
+              status: "complete",
+              durationMs: duration,
+            };
+          }
+        }
+      };
+
       const runningIndex = next.findIndex((step) => step.status === "running");
 
+      if (target >= REPORT_STEP_INDEX) {
+        completePatchSandboxPair();
+      }
+
+      if (target === PATCH_STEP_INDEX || target === SANDBOX_STEP_INDEX) {
+        if (runningIndex >= 0 && runningIndex < PATCH_STEP_INDEX) {
+          completeStep(runningIndex);
+        }
+
+        const startedAt = stepStartRef.current[PATCH_STEP_INDEX] ?? stepStartRef.current[SANDBOX_STEP_INDEX] ?? now;
+        stepStartRef.current[PATCH_STEP_INDEX] = startedAt;
+        stepStartRef.current[SANDBOX_STEP_INDEX] = startedAt;
+
+        for (const index of [PATCH_STEP_INDEX, SANDBOX_STEP_INDEX]) {
+          if (next[index].status !== "complete" && next[index].status !== "failed") {
+            next[index] = {
+              ...next[index],
+              status: "running",
+            };
+          }
+        }
+
+        return next;
+      }
+
       if (runningIndex >= 0 && runningIndex < target) {
-        const startedAt = stepStartRef.current[runningIndex] ?? now;
-        next[runningIndex] = {
-          ...next[runningIndex],
-          status: "complete",
-          durationMs: now - startedAt,
-        };
+        completeStep(runningIndex);
       }
 
       if (runningIndex !== target && target >= 0 && target < next.length) {
@@ -752,6 +815,23 @@ export default function DashboardPage() {
         indexToFail = 0;
       }
 
+      if (isCoupledPipelineStep(indexToFail)) {
+        const startedAt = stepStartRef.current[PATCH_STEP_INDEX] ?? stepStartRef.current[SANDBOX_STEP_INDEX] ?? now;
+        stepStartRef.current[PATCH_STEP_INDEX] = startedAt;
+        stepStartRef.current[SANDBOX_STEP_INDEX] = startedAt;
+        const duration = Math.max(0, now - startedAt);
+
+        for (const index of [PATCH_STEP_INDEX, SANDBOX_STEP_INDEX]) {
+          next[index] = {
+            ...next[index],
+            status: "failed",
+            durationMs: duration,
+          };
+        }
+
+        return next;
+      }
+
       const startedAt = stepStartRef.current[indexToFail];
       next[indexToFail] = {
         ...next[indexToFail],
@@ -763,21 +843,43 @@ export default function DashboardPage() {
     });
   }
 
-  function completePipelineSteps() {
+  function completePipelineSteps(forceSuccess = false) {
     const now = Date.now();
-    setStepRuntime((previous) =>
-      previous.map((step, index) => {
-        if (step.status === "complete") return step;
-        if (step.status === "failed") return step;
+    setStepRuntime((previous) => {
+      const next = previous.map((step) => ({ ...step }));
 
-        if (step.status === "running") {
-          const startedAt = stepStartRef.current[index] ?? now;
-          return { status: "complete", durationMs: now - startedAt };
+      const coupledStartedAt = stepStartRef.current[PATCH_STEP_INDEX] ?? stepStartRef.current[SANDBOX_STEP_INDEX] ?? now;
+      stepStartRef.current[PATCH_STEP_INDEX] = coupledStartedAt;
+      stepStartRef.current[SANDBOX_STEP_INDEX] = coupledStartedAt;
+      const coupledDuration = Math.max(0, now - coupledStartedAt);
+
+      for (const index of [PATCH_STEP_INDEX, SANDBOX_STEP_INDEX]) {
+        if (forceSuccess || next[index].status !== "failed") {
+          next[index] = {
+            status: "complete",
+            durationMs: coupledDuration,
+          };
+        }
+      }
+
+      for (let index = 0; index < next.length; index += 1) {
+        if (isCoupledPipelineStep(index)) {
+          continue;
         }
 
-        return { status: "complete", durationMs: step.durationMs ?? 0 };
-      }),
-    );
+        const step = next[index];
+        if (!forceSuccess && (step.status === "complete" || step.status === "failed")) {
+          continue;
+        }
+
+        const startedAt = stepStartRef.current[index] ?? now;
+        stepStartRef.current[index] = startedAt;
+        const duration = Math.max(0, now - startedAt);
+        next[index] = { status: "complete", durationMs: duration };
+      }
+
+      return next;
+    });
   }
 
   function pushTerminalLine(raw: string, stepIndex: number) {
@@ -1014,6 +1116,7 @@ export default function DashboardPage() {
     }
 
     setIsRunningPipeline(true);
+  setIsStoppingPipeline(false);
     setPipelineFeedback({ tone: "info", message: "Starting autonomous ticket-to-fix execution..." });
     setTerminalLines([]);
     firstLineIdByStepRef.current = {};
@@ -1024,9 +1127,6 @@ export default function DashboardPage() {
         const stepIndex = detectStepFromLog(line);
         if (stepIndex >= 0) {
           advanceToStep(stepIndex);
-        }
-        if (looksLikeFailure(line)) {
-          markRunningStepFailed();
         }
         pushTerminalLine(line, stepIndex);
       });
@@ -1041,8 +1141,15 @@ export default function DashboardPage() {
       const ticketFailures = reportTickets.filter((ticket) => isTicketFailed(ticket)).length;
       const hasTicketFailures = ticketFailures > 0 || (processed > 0 && successful < processed);
 
+      const finalStatus = String(lastRun.status ?? "").toLowerCase();
+      if (finalStatus === "stopped") {
+        markRunningStepFailed();
+        setPipelineFeedback({ tone: "warning", message: "Pipeline stopped by user." });
+        return;
+      }
+
       if (lastRun.exitCode === 0 && !hasTicketFailures) {
-        completePipelineSteps();
+        completePipelineSteps(true);
         setPipelineFeedback({ tone: "success", message: "Pipeline completed successfully." });
       } else if (lastRun.exitCode === 0 && hasTicketFailures) {
         markRunningStepFailed();
@@ -1062,6 +1169,31 @@ export default function DashboardPage() {
       setPipelineFeedback(formatApiError(error));
     } finally {
       setIsRunningPipeline(false);
+      setIsStoppingPipeline(false);
+    }
+  }
+
+  async function handleStopPipeline() {
+    if (!hasBackendBaseUrl) {
+      setPipelineFeedback({
+        tone: "error",
+        message: "Backend base URL is not configured. Set NEXT_PUBLIC_BACKEND_BASE_URL in frontend/nextjs/.env.local.",
+      });
+      return;
+    }
+
+    if (!isRunningPipeline) {
+      return;
+    }
+
+    setIsStoppingPipeline(true);
+    setPipelineFeedback({ tone: "warning", message: "Stop requested. Waiting for backend pipeline to halt..." });
+
+    try {
+      await stopPipelineRun(BACKEND_BASE_URL);
+    } catch (error) {
+      setIsStoppingPipeline(false);
+      setPipelineFeedback(formatApiError(error));
     }
   }
 
@@ -1538,9 +1670,15 @@ export default function DashboardPage() {
 
                 <p>agent-fix-runner · {AGENT_CODE}</p>
 
-                <button className="button-primary" type="button" onClick={handleRunPipeline} disabled={!pipelineReady || isRunningPipeline}>
-                  {isRunningPipeline ? "Running..." : "Run Pipeline ▶"}
-                </button>
+                {isRunningPipeline ? (
+                  <button className="ghost-button" type="button" onClick={handleStopPipeline} disabled={isStoppingPipeline}>
+                    {isStoppingPipeline ? "Stopping..." : "Stop Pipeline ■"}
+                  </button>
+                ) : (
+                  <button className="button-primary" type="button" onClick={handleRunPipeline} disabled={!pipelineReady}>
+                    {pipelineMeta || pipelineReport ? "Restart Pipeline ▶" : "Run Pipeline ▶"}
+                  </button>
+                )}
               </header>
 
               <FeedbackBanner feedback={pipelineFeedback} />
@@ -1681,7 +1819,7 @@ export default function DashboardPage() {
                   ⬇ Export JSON
                 </button>
                 <button type="button" className="ghost-button" onClick={handleRunPipeline} disabled={isRunningPipeline || !pipelineReady}>
-                  ↺ Re-run Pipeline
+                  ↺ Restart Pipeline
                 </button>
 
                 <span className="resolved-meta">

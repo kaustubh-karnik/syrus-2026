@@ -6,7 +6,7 @@ from typing import Optional
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 class Settings(BaseSettings):
-    OPENAI_API_KEY: str
+    OPENAI_API_KEY: Optional[str] = None
     GROQ_API_KEY: str
     OPENROUTER_API_KEY: Optional[str] = None
     OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     REPOS_BASE_DIR: Optional[str] = None
     TARGET_REPO_ID: Optional[str] = None
     TARGET_REPO_COMMIT_SHA: Optional[str] = None
-    TARGET_REPO_PATH: str = r"C:\Users\Kaustubh\kk\Coding\syrus-2026-project"
+    TARGET_REPO_PATH: str = r"C:\Users\Kaustubh\kk\Coding\shopstack-platform_testing"
     GITHUB_TOKEN: Optional[str] = None
     GITHUB_REPO: Optional[str] = None
     GITHUB_BASE_BRANCH: Optional[str] = None
