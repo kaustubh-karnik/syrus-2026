@@ -22,7 +22,7 @@ const monoFont = JetBrains_Mono({
 
 const APP_TITLE = (process.env.NEXT_PUBLIC_APP_TITLE ?? "MPM Build Mission Control").trim();
 const APP_DESCRIPTION =
-  (process.env.NEXT_PUBLIC_APP_DESCRIPTION ?? "Autonomous incident-to-fix engineering operations console").trim();
+  (process.env.NEXT_PUBLIC_APP_DESCRIPTION ?? "Autonomous engineering operations console").trim();
 
 export const metadata: Metadata = {
   title: APP_TITLE,

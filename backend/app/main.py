@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -16,8 +17,8 @@ from app.agents.github_clone_agent import clone_repository_agent
 from app.agents.pipeline import run_pipeline_sequential, run_pipeline_with_retries
 from app.agents.ticket_analyzer import ticket_analyzer_node
 from app.agents.vector_search import vector_search_node
-from app.config import settings
-from app.mcp.github_client import GitHubMCPClient
+from app.config import PROJECT_ROOT, settings
+from app.mcp.github_client import GitHubMCPClient, parse_owner_repo_from_url, parse_repo_owner_name
 from app.mcp.jira_client import JiraMCPClient
 from app.services.ticket_service import TicketService
 
@@ -46,11 +47,113 @@ _pipeline_run_state: dict = {
     "stopRequested": False,
     "stopReason": None,
     "wasStopped": False,
+    "targetRepoPath": None,
+    "targetRepoId": None,
+    "targetRepoUrl": None,
 }
 _pipeline_lock = threading.Lock()
 _pipeline_process: Optional[subprocess.Popen] = None
 _pipeline_stop_requested = False
 _pipeline_stop_reason: Optional[str] = None
+_active_repo_context_file = Path(PROJECT_ROOT) / ".active_repo_context.json"
+
+_active_repo_context: dict = {
+    "repoPath": None,
+    "repoId": None,
+    "repoUrl": None,
+    "ref": None,
+}
+
+
+def _load_active_repo_context_from_disk() -> None:
+    if not _active_repo_context_file.exists():
+        return
+
+    try:
+        payload = json.loads(_active_repo_context_file.read_text(encoding="utf-8"))
+    except Exception:
+        return
+
+    if not isinstance(payload, dict):
+        return
+
+    for key in ["repoPath", "repoId", "repoUrl", "ref"]:
+        value = str(payload.get(key) or "").strip()
+        _active_repo_context[key] = value or None
+
+
+def _save_active_repo_context_to_disk() -> None:
+    payload = {
+        "repoPath": str(_active_repo_context.get("repoPath") or "").strip() or None,
+        "repoId": str(_active_repo_context.get("repoId") or "").strip() or None,
+        "repoUrl": str(_active_repo_context.get("repoUrl") or "").strip() or None,
+        "ref": str(_active_repo_context.get("ref") or "").strip() or None,
+    }
+    try:
+        _active_repo_context_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+_load_active_repo_context_from_disk()
+
+
+def _resolve_runtime_repo_context() -> dict:
+    repo_path = str(_active_repo_context.get("repoPath") or "").strip()
+    repo_id = str(_active_repo_context.get("repoId") or "").strip()
+    repo_url = str(_active_repo_context.get("repoUrl") or "").strip()
+    ref = str(_active_repo_context.get("ref") or "").strip()
+
+    if not repo_path:
+        repo_path = str(settings.TARGET_REPO_PATH or "").strip()
+    if not repo_id:
+        repo_id = str(settings.TARGET_REPO_ID or "").strip()
+    if not repo_url:
+        repo_url = str(settings.GITHUB_REPO or "").strip()
+    if not ref:
+        ref = str(settings.GITHUB_BASE_BRANCH or "main").strip() or "main"
+
+    return {
+        "repoPath": repo_path,
+        "repoId": repo_id,
+        "repoUrl": repo_url,
+        "ref": ref,
+    }
+
+
+def _resolve_runtime_owner_repo(runtime_context: dict) -> tuple[str | None, str | None]:
+    repo_url = str(runtime_context.get("repoUrl") or "").strip()
+    repo_id = str(runtime_context.get("repoId") or "").strip()
+
+    parsed_url = parse_owner_repo_from_url(repo_url)
+    if parsed_url:
+        return parsed_url[0], parsed_url[1]
+
+    if repo_id:
+        try:
+            owner, repo = parse_repo_owner_name(repo_id)
+            return owner, repo
+        except Exception:
+            return None, None
+
+    return None, None
+
+
+def _build_pipeline_env(runtime_context: dict) -> dict:
+    env = os.environ.copy()
+    repo_path = str(runtime_context.get("repoPath") or "").strip()
+    repo_id = str(runtime_context.get("repoId") or "").strip()
+
+    if repo_path:
+        env["TARGET_REPO_PATH"] = repo_path
+    if repo_id:
+        env["TARGET_REPO_ID"] = repo_id
+
+    owner, repo = _resolve_runtime_owner_repo(runtime_context)
+    if owner and repo:
+        env["GITHUB_REPO"] = f"{owner}/{repo}"
+
+    return env
 
 
 class CloneRepoRequest(BaseModel):
@@ -123,6 +226,9 @@ def solve_all_bugs_stream():
     if not script_path.exists():
         raise HTTPException(status_code=500, detail={"message": f"Pipeline script not found: {script_path}"})
 
+    runtime_repo_context = _resolve_runtime_repo_context()
+    runtime_env = _build_pipeline_env(runtime_repo_context)
+
     started_at = datetime.utcnow().isoformat() + "Z"
     _pipeline_run_state.update(
         {
@@ -135,6 +241,9 @@ def solve_all_bugs_stream():
             "stopRequested": False,
             "stopReason": None,
             "wasStopped": False,
+            "targetRepoPath": runtime_repo_context.get("repoPath"),
+            "targetRepoId": runtime_repo_context.get("repoId"),
+            "targetRepoUrl": runtime_repo_context.get("repoUrl"),
         }
     )
 
@@ -154,6 +263,7 @@ def solve_all_bugs_stream():
             process = subprocess.Popen(
                 [sys.executable, "-u", str(script_path)],
                 cwd=str(backend_root),
+                env=runtime_env,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -259,6 +369,16 @@ def clone_repo(request: CloneRepoRequest):
     result = clone_repository_agent(request.model_dump())
     if result.get("status") == "error":
         raise HTTPException(status_code=400, detail=result)
+
+    _active_repo_context.update(
+        {
+            "repoPath": str(result.get("localPath") or "").strip() or None,
+            "repoId": str(result.get("repoId") or request.repoId or "").strip() or None,
+            "repoUrl": str(result.get("repoUrl") or request.repoUrl or "").strip() or None,
+            "ref": str(result.get("ref") or request.ref or "").strip() or None,
+        }
+    )
+    _save_active_repo_context_to_disk()
     return result
 
 
@@ -293,7 +413,12 @@ def analyze_ticket(ticket_key: str):
                 "suggested_tickets": jira.search_issues(max_results=10),
             },
         ) from exc
-    return run_pipeline_with_retries(ticket, max_attempts=1)
+    runtime_context = _resolve_runtime_repo_context()
+    return run_pipeline_with_retries(
+        ticket,
+        max_attempts=1,
+        target_repo_path=runtime_context.get("repoPath") or settings.TARGET_REPO_PATH,
+    )
 
 
 @app.post("/analyze/batch")
@@ -318,10 +443,12 @@ def analyze_tickets_batch(request: BatchAnalyzeRequest):
             "message": "No tickets found in Jira for the configured project",
         }
 
+    runtime_context = _resolve_runtime_repo_context()
     return run_pipeline_sequential(
         tickets=tickets,
         stop_on_failure=request.stopOnFailure,
         max_attempts=max(1, min(request.maxAttempts, 5)),
+        target_repo_path=runtime_context.get("repoPath") or settings.TARGET_REPO_PATH,
     )
 
 
@@ -342,14 +469,17 @@ def debug_retrieval(ticket_key: str):
             },
         ) from exc
 
+    runtime_context = _resolve_runtime_repo_context()
+    target_repo_path = runtime_context.get("repoPath") or settings.TARGET_REPO_PATH
+
     analysis = ticket_analyzer_node({"ticket": ticket})
     retrieval_state = {
         "ticket": ticket,
         "repo_id": settings.TARGET_REPO_ID,
         "commit_sha": settings.TARGET_REPO_COMMIT_SHA,
-        "base_repo_path": settings.TARGET_REPO_PATH,
-        "repo_path": settings.TARGET_REPO_PATH,
-        "workspace_path": settings.TARGET_REPO_PATH,
+        "base_repo_path": target_repo_path,
+        "repo_path": target_repo_path,
+        "workspace_path": target_repo_path,
         "bug_type": analysis.get("bug_type"),
         "keywords": analysis.get("keywords"),
         "likely_files": analysis.get("likely_files"),

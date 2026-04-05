@@ -8,7 +8,7 @@ IGNORED_DIRS = {
     ".git",
     ".hg",
     ".svn",
-    ".syrus_cache",
+    ".pipeline_cache",
     "__pycache__",
     "node_modules",
     "dist",

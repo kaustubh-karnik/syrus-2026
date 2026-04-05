@@ -3,9 +3,11 @@ import json
 from pathlib import Path
 from typing import Any
 
+CACHE_DIR_NAME = ".pipeline_cache"
+
 
 def cache_root(repo_root: Path) -> Path:
-    return repo_root / ".syrus_cache"
+    return repo_root / CACHE_DIR_NAME
 
 
 def _cache_file(repo_root: Path, namespace: str, key_parts: list[str]) -> Path:
@@ -25,7 +27,7 @@ def repo_cache_token(repo_root: Path, repo_state: dict | None) -> str:
     for path in repo_root.rglob("*"):
         if not path.is_file():
             continue
-        if ".git" in path.parts or ".syrus_cache" in path.parts:
+        if ".git" in path.parts or CACHE_DIR_NAME in path.parts:
             continue
         try:
             stat = path.stat()

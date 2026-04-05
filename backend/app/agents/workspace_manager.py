@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Iterable
 
 
-ATTEMPTS_DIR_NAME = ".syrus_attempts"
+ATTEMPTS_DIR_NAME = "attempts"
 BACKUPS_DIR_NAME = "backups"
 IGNORED_DIR_NAMES = {
     ".git",
@@ -19,7 +19,7 @@ IGNORED_DIR_NAMES = {
     ".next",
     ".turbo",
     "node_modules",
-    ".syrus_attempts",
+    ATTEMPTS_DIR_NAME,
     "backups",
 }
 IGNORED_FILE_NAMES = {

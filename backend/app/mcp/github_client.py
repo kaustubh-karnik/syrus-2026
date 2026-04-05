@@ -743,33 +743,11 @@ class GitHubMCPClient:
 
         self._run_checked(["git", "push", "-u", "origin", branch_name], str(repository_root))
 
-        push_owner, push_repo = owner, repo
-        configured_repo = str(settings.GITHUB_REPO or "").strip()
-        configured_owner_repo: tuple[str, str] | None = None
-        if configured_repo:
-            parsed = parse_owner_repo_from_url(configured_repo)
-            if parsed:
-                configured_owner_repo = parsed
-            else:
-                try:
-                    configured_owner_repo = parse_repo_owner_name(configured_repo)
-                except Exception:
-                    configured_owner_repo = None
-
-        base_owner, base_repo = push_owner, push_repo
+        # Always target the exact repository that was resolved from the local clone's
+        # git remote and used for push. This avoids accidentally opening PRs against
+        # an older repository from settings when multiple repos share the same name.
+        base_owner, base_repo = owner, repo
         head_ref = branch_name
-        if configured_owner_repo:
-            configured_owner, configured_name = configured_owner_repo
-            # Safe override: only use configured base repo when repository name matches
-            # the pushed repository (typical fork workflow keeps same repo name).
-            if configured_name.lower() == push_repo.lower():
-                base_owner, base_repo = configured_owner, configured_name
-                head_ref = branch_name if configured_owner.lower() == push_owner.lower() else f"{push_owner}:{branch_name}"
-            else:
-                print(
-                    "[WARN] GITHUB_REPO differs from push remote repository name; "
-                    f"using push remote for PR base: {push_owner}/{push_repo}"
-                )
 
         pr_title = f"[{ticket_key}] {ticket_summary}".strip()
         pr_body_lines = [
@@ -822,8 +800,8 @@ class GitHubMCPClient:
             "base_branch": base_branch,
             "owner": base_owner,
             "repo": base_repo,
-            "push_owner": push_owner,
-            "push_repo": push_repo,
+            "push_owner": owner,
+            "push_repo": repo,
             "commit_sha": commit_sha,
             "files": add_candidates,
         }
@@ -1493,6 +1471,32 @@ class GitHubMCPClient:
                 return normalized.split("/", 1)[1]
             return normalized
 
+        requested_owner_repo = parse_owner_repo_from_url(repo_url)
+
+        def _origin_matches_requested(local_repo_path: str) -> bool:
+            code, origin_stdout, _ = _run_cmd_with_code(
+                ["git", "-C", local_repo_path, "config", "--get", "remote.origin.url"]
+            )
+            if code != 0:
+                return False
+
+            origin_url = str(origin_stdout or "").strip()
+            if not origin_url:
+                return False
+
+            if requested_owner_repo:
+                existing_owner_repo = parse_owner_repo_from_url(origin_url)
+                if not existing_owner_repo:
+                    return False
+                return (
+                    existing_owner_repo[0].lower() == requested_owner_repo[0].lower()
+                    and existing_owner_repo[1].lower() == requested_owner_repo[1].lower()
+                )
+
+            normalized_requested = str(repo_url or "").strip().rstrip("/").lower().replace(".git", "")
+            normalized_origin = origin_url.rstrip("/").lower().replace(".git", "")
+            return bool(normalized_requested) and normalized_requested == normalized_origin
+
         local_path = os.path.join(base_dir, repo_id.replace("/", os.sep))
         git_dir = os.path.join(local_path, ".git")
 
@@ -1506,8 +1510,14 @@ class GitHubMCPClient:
             _run_cmd(["git", "clone", repo_url, local_path])
             operation = "recloned"
         else:
-            _run_cmd(["git", "-C", local_path, "fetch", "--all", "--prune"])
-            operation = "updated"
+            if not _origin_matches_requested(local_path):
+                shutil.rmtree(local_path, onerror=_on_rm_error)
+                os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                _run_cmd(["git", "clone", repo_url, local_path])
+                operation = "recloned_remote_mismatch"
+            else:
+                _run_cmd(["git", "-C", local_path, "fetch", "--all", "--prune"])
+                operation = "updated"
 
         requested_ref = str(ref or "").strip()
         primary_ref = requested_ref or "main"

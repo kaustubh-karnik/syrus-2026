@@ -13,8 +13,8 @@ function envOrFallback(value: string | undefined, fallback: string): string {
 
 const BACKEND_BASE_URL = (process.env.NEXT_PUBLIC_BACKEND_BASE_URL ?? "").trim().replace(/\/+$/, "");
 const TEAM_NAME = envOrFallback(process.env.NEXT_PUBLIC_TEAM_NAME, "MPM Build");
-const AGENT_LABEL = envOrFallback(process.env.NEXT_PUBLIC_AGENT_LABEL, "PS-02 · Autonomous Fix Agent");
-const AGENT_CODE = envOrFallback(process.env.NEXT_PUBLIC_AGENT_CODE, "PS-02");
+const AGENT_LABEL = envOrFallback(process.env.NEXT_PUBLIC_AGENT_LABEL, "Automated Fix Agent");
+const AGENT_CODE = envOrFallback(process.env.NEXT_PUBLIC_AGENT_CODE, "AGENT");
 const NAV_TAGLINE = envOrFallback(process.env.NEXT_PUBLIC_NAV_TAGLINE, "incident → fix");
 const INITIAL_INCIDENT_ID = "INC-0000";
 
@@ -1117,7 +1117,7 @@ export default function DashboardPage() {
 
     setIsRunningPipeline(true);
   setIsStoppingPipeline(false);
-    setPipelineFeedback({ tone: "info", message: "Starting autonomous ticket-to-fix execution..." });
+    setPipelineFeedback({ tone: "info", message: "Starting automated pipeline execution..." });
     setTerminalLines([]);
     firstLineIdByStepRef.current = {};
     resetStepRuntime();

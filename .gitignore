@@ -4,7 +4,7 @@ venv/
 target-repos/
 working-copy/
 chroma_db/
-.syrus_cache/
+.pipeline_cache/
 
 # Next.js / React frontend artifacts
 node_modules/
