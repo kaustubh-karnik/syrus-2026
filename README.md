@@ -1,5 +1,3 @@
-# Syrus 2026 Test Repo
-
 ## Start the project
 
 ### 1) Start backend (FastAPI)
