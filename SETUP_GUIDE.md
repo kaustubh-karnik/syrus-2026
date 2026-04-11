@@ -1,8 +1,8 @@
-# Syrus 2026 - Setup & Quick Start Guide
+# MPM Build - Setup & Quick Start Guide
 
 ## Overview
 
-Syrus 2026 is an automated bug fix system with:
+MPM Build is an automated incident-to-fix system with:
 - **Backend**: FastAPI (Python)
 - **Frontend**: Next.js/React (TypeScript)
 - **Integration**: Jira, GitHub, Docker, Supabase

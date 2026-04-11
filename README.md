@@ -1,4 +1,4 @@
-# MPM Build - Automated Incident-to-Fix Pipeline
+# MPM Build - Autonomous Incident-to-Fix Engineering Agent
 
 A full-stack AI system that ingests a repository, fetches incidents (Jira or manual), generates code fixes, validates them, and produces a structured report.
 
@@ -12,6 +12,12 @@ A full-stack AI system that ingests a repository, fetches incidents (Jira or man
 ## What this project does
 
 For each incident/ticket, the system runs:
+**MPM Build** is an automated incident-to-fix system that combines:
+- **Incident Management**: Integrates with Jira to fetch and track bug tickets
+- **Code Retrieval**: Uses vector search and semantic analysis to find relevant code
+- **AI-Powered Fix Generation**: Leverages LLMs to generate minimal, targeted code fixes
+- **Automated Validation**: Runs tests in Docker sandboxes to verify fix correctness
+- **Report Generation**: Compiles detailed root cause analysis and validation results
 
 1. Ticket analysis
 2. Semantic/vector retrieval
@@ -47,6 +53,55 @@ Pipeline core (LangGraph)
 Report assembler
   backend/test_pipeline.py emits:
   PIPELINE_REPORT_JSON_START ... JSON ... PIPELINE_REPORT_JSON_END
+```
+mpm-build-incident-fix/
+├── backend/                          # FastAPI backend application
+│   ├── app/
+│   │   ├── main.py                   # FastAPI app & route handlers
+│   │   ├── config.py                 # Settings & environment config
+│   │   ├── agents/                   # LangGraph agent nodes
+│   │   │   ├── state.py              # Agent state schema
+│   │   │   ├── pipeline.py           # Graph orchestration & routing
+│   │   │   ├── ticket_analyzer.py    # Ticket parsing & intent extraction
+│   │   │   ├── vector_search.py      # Semantic code search
+│   │   │   ├── fix_generator.py      # LLM-based fix generation
+│   │   │   ├── patch_code.py         # Safe code patching
+│   │   │   ├── sandbox_runner.py     # Docker test execution
+│   │   │   ├── github_clone_agent.py # Repository cloning
+│   │   │   └── workspace_manager.py  # Workspace/attempt management
+│   │   ├── retrieval/                # Code retrieval & analysis
+│   │   │   ├── vector_search.py      # Vector-based semantic search
+│   │   │   ├── context_bundle.py     # Code context assembly
+│   │   │   ├── graphrag_retriever.py # Graph-based retrieval
+│   │   │   └── validation_planner.py # Test strategy planning
+│   │   ├── mcp/                      # MCP (Model Context Protocol) clients
+│   │   │   ├── jira_client.py        # Jira issue integration
+│   │   │   └── github_client.py      # GitHub API integration
+│   │   ├── services/                 # Business logic services
+│   │   │   └── ticket_service.py     # Ticket fetching & caching
+│   │   └── utils/
+│   │       └── safety_checker.py     # Code safety validation
+│   ├── requirements.txt              # Python dependencies
+│   └── test_pipeline.py              # End-to-end pipeline script
+│
+├── frontend/nextjs/                  # Next.js React frontend
+│   ├── src/
+│   │   ├── app/
+│   │   │   ├── layout.tsx            # Root layout & providers
+│   │   │   ├── page.tsx              # Main dashboard component
+│   │   │   └── globals.css           # Global styles
+│   │   └── lib/
+│   │       ├── api.ts                # Backend API client
+│   │       ├── types.ts              # Shared TypeScript interfaces
+│   │       └── utils.ts              # Helper utilities
+│   ├── package.json                  # Node dependencies
+│   ├── tsconfig.json                 # TypeScript config
+│   ├── next.config.mjs               # Next.js configuration
+│   └── .env.local                    # Frontend environment variables
+│
+├── .env                              # Backend environment variables
+├── requirements.txt                  # Root Python dependencies
+└── README.md                         # This file
 ```
 
 ---
