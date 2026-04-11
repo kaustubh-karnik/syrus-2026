@@ -65,6 +65,33 @@ _active_repo_context: dict = {
 }
 
 
+def _is_within(parent: Path, child: Path) -> bool:
+    parent_resolved = parent.resolve()
+    child_resolved = child.resolve()
+    try:
+        child_resolved.relative_to(parent_resolved)
+        return True
+    except ValueError:
+        return False
+
+
+def _normalize_runtime_repo_path(value: object) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+
+    candidate = Path(raw).expanduser()
+    if not candidate.is_absolute():
+        return ""
+
+    resolved = candidate.resolve()
+    project_root = Path(PROJECT_ROOT).resolve()
+    if _is_within(project_root, resolved):
+        return ""
+
+    return str(resolved)
+
+
 def _load_active_repo_context_from_disk() -> None:
     if not _active_repo_context_file.exists():
         return
@@ -99,13 +126,11 @@ _load_active_repo_context_from_disk()
 
 
 def _resolve_runtime_repo_context() -> dict:
-    repo_path = str(_active_repo_context.get("repoPath") or "").strip()
+    repo_path = _normalize_runtime_repo_path(_active_repo_context.get("repoPath"))
     repo_id = str(_active_repo_context.get("repoId") or "").strip()
     repo_url = str(_active_repo_context.get("repoUrl") or "").strip()
     ref = str(_active_repo_context.get("ref") or "").strip()
 
-    if not repo_path:
-        repo_path = str(settings.TARGET_REPO_PATH or "").strip()
     if not repo_id:
         repo_id = str(settings.TARGET_REPO_ID or "").strip()
     if not repo_url:
@@ -119,6 +144,21 @@ def _resolve_runtime_repo_context() -> dict:
         "repoUrl": repo_url,
         "ref": ref,
     }
+
+
+def _require_runtime_repo_path(runtime_context: dict) -> str:
+    repo_path = str(runtime_context.get("repoPath") or "").strip()
+    if not repo_path:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": (
+                    "No active target repository is configured. Clone a repository first and choose an "
+                    "absolute folder path outside this project repository."
+                )
+            },
+        )
+    return repo_path
 
 
 def _resolve_runtime_owner_repo(runtime_context: dict) -> tuple[str | None, str | None]:
@@ -227,6 +267,7 @@ def solve_all_bugs_stream():
         raise HTTPException(status_code=500, detail={"message": f"Pipeline script not found: {script_path}"})
 
     runtime_repo_context = _resolve_runtime_repo_context()
+    _require_runtime_repo_path(runtime_repo_context)
     runtime_env = _build_pipeline_env(runtime_repo_context)
 
     started_at = datetime.utcnow().isoformat() + "Z"
@@ -414,10 +455,11 @@ def analyze_ticket(ticket_key: str):
             },
         ) from exc
     runtime_context = _resolve_runtime_repo_context()
+    target_repo_path = _require_runtime_repo_path(runtime_context)
     return run_pipeline_with_retries(
         ticket,
         max_attempts=1,
-        target_repo_path=runtime_context.get("repoPath") or settings.TARGET_REPO_PATH,
+        target_repo_path=target_repo_path,
     )
 
 
@@ -444,11 +486,12 @@ def analyze_tickets_batch(request: BatchAnalyzeRequest):
         }
 
     runtime_context = _resolve_runtime_repo_context()
+    target_repo_path = _require_runtime_repo_path(runtime_context)
     return run_pipeline_sequential(
         tickets=tickets,
         stop_on_failure=request.stopOnFailure,
         max_attempts=max(1, min(request.maxAttempts, 5)),
-        target_repo_path=runtime_context.get("repoPath") or settings.TARGET_REPO_PATH,
+        target_repo_path=target_repo_path,
     )
 
 
@@ -470,7 +513,7 @@ def debug_retrieval(ticket_key: str):
         ) from exc
 
     runtime_context = _resolve_runtime_repo_context()
-    target_repo_path = runtime_context.get("repoPath") or settings.TARGET_REPO_PATH
+    target_repo_path = _require_runtime_repo_path(runtime_context)
 
     analysis = ticket_analyzer_node({"ticket": ticket})
     retrieval_state = {

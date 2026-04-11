@@ -506,7 +506,10 @@ def patch_code_node(state: AgentState) -> AgentState:
     ticket = state.get("ticket", {})
     ticket_key = ticket.get("jira_key", "UNKNOWN")
     retrieval_context = state.get("retrieval_context")
-    repo_root = Path(state.get("repo_path") or settings.TARGET_REPO_PATH).resolve()
+    repo_path = str(state.get("repo_path") or "").strip()
+    if not repo_path:
+        return _fail_state("Target repository path is missing in state", status="patch_failed")
+    repo_root = Path(repo_path).resolve()
 
     if not fix:
         return _fail_state("No fix in state - run fix_generator_node first")

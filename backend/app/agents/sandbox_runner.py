@@ -10,7 +10,10 @@ from app.retrieval.validation_planner import build_validation_plan
 
 
 def _repo_root(state: AgentState) -> Path:
-    return Path(state.get("repo_path") or settings.TARGET_REPO_PATH).resolve()
+    repo_path = str(state.get("repo_path") or "").strip()
+    if not repo_path:
+        raise ValueError("Target repository path is missing in state")
+    return Path(repo_path).resolve()
 
 
 def _run(cmd: list[str], repo_root: Path, timeout: int = 180) -> tuple[int, str, str]:
@@ -276,7 +279,23 @@ def _stop_docker(repo_root: Path) -> None:
 
 
 def sandbox_runner_node(state: AgentState) -> AgentState:
-    repo_root = _repo_root(state)
+    try:
+        repo_root = _repo_root(state)
+    except ValueError as exc:
+        return {
+            "sandbox_result": {
+                "success": False,
+                "service": None,
+                "stage": "validation_planning",
+                "skipped": False,
+                "commands": [],
+                "error": str(exc),
+            },
+            "status": "sandbox_infra_failed",
+            "error": str(exc),
+            "retry_category": "infra",
+        }
+
     print("\nSandbox Runner: starting...")
     print(f"   Repo: {repo_root}")
 

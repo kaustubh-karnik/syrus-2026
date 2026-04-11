@@ -62,7 +62,15 @@ def create_pr_node(state: AgentState) -> AgentState:
             "error": "No patched file available to create a PR",
         }
 
-    repo_root = Path(state.get("base_repo_path") or settings.TARGET_REPO_PATH).resolve()
+    base_repo_path = str(state.get("base_repo_path") or "").strip()
+    if not base_repo_path:
+        return {
+            "pr_result": None,
+            "status": "pr_failed",
+            "error": "Target repository path is missing in state",
+        }
+
+    repo_root = Path(base_repo_path).resolve()
     primary_path = repo_root / primary_file
     if not primary_path.exists():
         return {

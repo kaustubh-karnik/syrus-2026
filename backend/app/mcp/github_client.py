@@ -697,7 +697,11 @@ class GitHubMCPClient:
         if not self.github_token:
             raise RuntimeError("GITHUB_TOKEN is not configured")
 
-        repository_root = Path(repo_root or settings.TARGET_REPO_PATH).resolve()
+        repository_root_input = str(repo_root or "").strip()
+        if not repository_root_input:
+            raise RuntimeError("repo_root is required for PR creation")
+
+        repository_root = Path(repository_root_input).resolve()
         if not repository_root.exists():
             raise FileNotFoundError(f"Repository root does not exist: {repository_root}")
 

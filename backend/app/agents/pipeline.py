@@ -69,7 +69,9 @@ def run_pipeline(
     retry_context: dict | None = None,
 ) -> dict:
     pipeline = build_pipeline()
-    base_repo = base_repo_path or settings.TARGET_REPO_PATH
+    base_repo = str(base_repo_path or "").strip()
+    if not base_repo:
+        raise ValueError("Target repository path is required for pipeline execution")
     attempt_repo = repo_path or base_repo
 
     initial_state: AgentState = {
@@ -289,7 +291,9 @@ def run_pipeline_with_retries(
     final_state: dict = {}
     preserved_workspaces: list[str] = []
     ticket_key = ticket.get("jira_key", "UNKNOWN")
-    base_target_repo = target_repo_path or settings.TARGET_REPO_PATH
+    base_target_repo = str(target_repo_path or "").strip()
+    if not base_target_repo:
+        raise ValueError("Target repository path is required for pipeline retry execution")
 
     last_workspace_info: dict | None = None
 
@@ -537,6 +541,7 @@ def run_pipeline_sequential(
                     ticket,
                     max_attempts=auto_max_attempts,
                     initial_retry_feedback=auto_feedback,
+                    target_repo_path=target_repo_path,
                 )
                 auto_status = auto_state.get("status", "unknown")
                 auto_success = auto_status in SUCCESS_TERMINAL_STATUSES

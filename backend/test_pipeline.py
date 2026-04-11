@@ -99,7 +99,12 @@ def run_test():
     print("\n" + "=" * 60)
     print("  FULL PIPELINE TEST: JIRA -> ANALYSIS -> VECTOR SEARCH -> FIX -> PATCH")
     print("=" * 60)
-    target_repo_root = Path(settings.TARGET_REPO_PATH).resolve()
+    target_repo_path = str(os.getenv("TARGET_REPO_PATH") or "").strip()
+    if not target_repo_path:
+        print("TARGET_REPO_PATH is not set. Clone/select a target repository first, then retry.")
+        return
+
+    target_repo_root = Path(target_repo_path).resolve()
     print(f"Target repo root (where promoted changes are written): {target_repo_root}")
 
     print("\nStep 1: Connecting to Jira MCP...")
@@ -156,6 +161,7 @@ def run_test():
         tickets=tickets,
         stop_on_failure=False,
         max_attempts=2,
+        target_repo_path=str(target_repo_root),
     )
 
     detailed_report = _build_detailed_report(batch_result, target_repo_root)

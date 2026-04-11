@@ -9,37 +9,68 @@ from app.mcp.github_client import (
 )
 
 
+def _is_within(parent: Path, child: Path) -> bool:
+    parent_resolved = parent.resolve()
+    child_resolved = child.resolve()
+    try:
+        child_resolved.relative_to(parent_resolved)
+        return True
+    except ValueError:
+        return False
+
+
+def _validate_repo_id(repo_id: str) -> str:
+    value = str(repo_id or "").strip().replace("\\", "/")
+    if not value:
+        raise ValueError("Missing required field: repoId")
+    if value.startswith("/") or value.startswith("../") or "/../" in f"/{value}/":
+        raise ValueError("Invalid repoId: path traversal is not allowed")
+    return value
+
+
+def _resolve_local_storage_path(raw_path: Any) -> str:
+    candidate_value = str(raw_path or "").strip()
+    if not candidate_value:
+        candidate_value = str(settings.REPOS_BASE_DIR or "").strip()
+    if not candidate_value:
+        raise ValueError(
+            "Missing localStorageLocation. Provide an absolute folder path where the repository should be cloned."
+        )
+
+    candidate_path = Path(candidate_value).expanduser()
+    if not candidate_path.is_absolute():
+        raise ValueError(
+            "localStorageLocation must be an absolute path (example: C:/Users/<you>/repos)."
+        )
+
+    resolved = candidate_path.resolve()
+    project_root = Path(PROJECT_ROOT).resolve()
+    if _is_within(project_root, resolved):
+        raise ValueError(
+            "localStorageLocation must be outside this project repository. Choose a folder outside MPM-Build."
+        )
+
+    return str(resolved)
+
+
 def clone_repository_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Clone a GitHub repository to a user-specified location.
+    try:
+        repo_id = _validate_repo_id(payload.get("repoId"))
+    except ValueError as exc:
+        return {"status": "error", "message": str(exc)}
 
-    The localStorageLocation is provided by the frontend form.
-    If not provided, defaults to ./repos relative to the project.
-    """
-    import os
-
-    repo_id = (payload.get("repoId") or "").strip()
     repo_url = (payload.get("repoUrl") or "").strip()
     ref = (payload.get("ref") or "main").strip()
-
-    # Get the path from the frontend form (user-provided)
-    local_storage_input = (payload.get("localStorageLocation") or "").strip()
-
-    # If user didn't provide a path, use ./repos as default
-    if not local_storage_input:
-        local_storage_input = "./repos"
-
-    # Resolve to absolute path (relative to PROJECT_ROOT if relative path)
-    local_storage = resolve_path_to_absolute(local_storage_input, base_for_relative=str(PROJECT_ROOT))
-
+    local_storage_input = payload.get("localStorageLocation") or settings.REPOS_BASE_DIR
+    try:
+        local_storage = _resolve_local_storage_path(local_storage_input)
+    except ValueError as exc:
+        return {"status": "error", "message": str(exc)}
     auto_run_docker = bool(
         payload.get("autoRunDocker")
         if payload.get("autoRunDocker") is not None
         else settings.AUTO_RUN_DOCKER_AFTER_CLONE
     )
-
-    if not repo_id:
-        return {"status": "error", "message": "Missing required field: repoId"}
 
     print("\n[CloneAgent] Starting clone flow")
     print(f"[CloneAgent] repoId={repo_id}")

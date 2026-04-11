@@ -71,7 +71,7 @@ class Settings(BaseSettings):
     REPOS_BASE_DIR: Optional[str] = None
     TARGET_REPO_ID: Optional[str] = None
     TARGET_REPO_COMMIT_SHA: Optional[str] = None
-    TARGET_REPO_PATH: str = r"C:\Users\Kaustubh\kk\Coding\shopstack-platform_testing"
+    TARGET_REPO_PATH: Optional[str] = None
     GITHUB_TOKEN: Optional[str] = None
     GITHUB_REPO: Optional[str] = None
     GITHUB_BASE_BRANCH: Optional[str] = None
@@ -80,7 +80,7 @@ class Settings(BaseSettings):
     SANDBOX_KEEP_DOCKER_CONTAINERS: bool = True
     SANDBOX_DOCKER_PASS_ON_ANY_RELEVANT_TEST: bool = True
     PATCH_DISABLE_VALIDATIONS: bool = True
-    SANDBOX_PYTHON_USE_LOCAL_COMPILE_ONLY: bool = True
+    SANDBOX_PYTHON_USE_LOCAL_COMPILE_ONLY: bool = False
     LLM_MAX_GENERATION_RETRIES: int = 6
     SANDBOX_RUN_DOCKER_FULL_SUITE_AFTER_BATCH: bool = True
     SANDBOX_AUTO_REPAIR_AFTER_POST_BATCH_FAILURE: bool = True

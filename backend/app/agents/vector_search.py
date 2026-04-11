@@ -128,7 +128,17 @@ def _discover_mcp_signals(
 
 
 def vector_search_node(state: AgentState) -> AgentState:
-    repo_root = Path(state.get("repo_path") or settings.TARGET_REPO_PATH).resolve()
+    repo_path = str(state.get("repo_path") or "").strip()
+    if not repo_path:
+        return {
+            "retrieval_context": None,
+            "retrieved_files": [],
+            "retrieved_code": "",
+            "status": "failed",
+            "error": "Target repository path is missing in state",
+        }
+
+    repo_root = Path(repo_path).resolve()
     if not repo_root.exists():
         return {
             "retrieval_context": None,

@@ -960,7 +960,7 @@ def fix_generator_node(state: AgentState) -> AgentState:
     retry_feedback = state.get("retry_feedback")
     retry_context = state.get("retry_context")
     fix_attempt = int(state.get("fix_attempt", 1) or 1)
-    repo_path = state.get("repo_path") or settings.TARGET_REPO_PATH
+    repo_path = state.get("repo_path")
     analysis_terms = []
     analysis_terms.extend([str(k) for k in (state.get("keywords") or []) if k])
     if state.get("bug_type"):

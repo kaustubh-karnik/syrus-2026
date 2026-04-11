@@ -145,6 +145,16 @@ function parseGithubUrl(value: string): { owner: string; repo: string } | null {
   return { owner: match[1], repo: match[2] };
 }
 
+function isAbsolutePathInput(value: string): boolean {
+  const input = value.trim();
+  if (!input) {
+    return false;
+  }
+
+  // Windows drive path, UNC path, or Unix absolute path.
+  return /^[a-zA-Z]:[\\/]/.test(input) || /^\\\\/.test(input) || /^\//.test(input);
+}
+
 function generateIncidentId(): string {
   const id = Math.floor(1000 + Math.random() * 9000);
   return `INC-${id}`;
@@ -652,17 +662,18 @@ export default function DashboardPage() {
       if (picker) {
         const handle = await picker({ mode: "read" });
         const folderName = (handle?.name ?? "").trim();
-        if (folderName) {
-          setWorkspacePath(`./${folderName}`);
-          setCloneFeedback({
-            tone: "info",
-            message: `Selected folder \"${folderName}\". Browser privacy hides absolute path; update it manually if your backend needs a full path.`,
-          });
+        const defaultPath = workspacePath || (folderName ? `C:\\Users\\<you>\\${folderName}` : "C:\\Users\\<you>\\repos");
+        const manualPath = window.prompt(
+          "Browser privacy does not expose absolute folder paths. Enter absolute clone directory path:",
+          defaultPath,
+        );
+        if (manualPath !== null) {
+          setWorkspacePath(manualPath.trim());
         }
         return;
       }
 
-      const manualPath = window.prompt("Enter local folder path for clone storage", workspacePath || "./workspace/repos");
+      const manualPath = window.prompt("Enter absolute local folder path for clone storage", workspacePath || "C:\\Users\\<you>\\repos");
       if (manualPath !== null) {
         setWorkspacePath(manualPath.trim());
       }
@@ -946,7 +957,15 @@ export default function DashboardPage() {
     if (!repoId.trim() || !workspacePath.trim()) {
       setCloneFeedback({
         tone: "error",
-        message: "Folder name and workspace path are required.",
+        message: "Folder name and clone base path are required.",
+      });
+      return;
+    }
+
+    if (!isAbsolutePathInput(workspacePath)) {
+      setCloneFeedback({
+        tone: "error",
+        message: "Clone base path must be absolute (for example: C:\\Users\\<you>\\repos).",
       });
       return;
     }
@@ -1368,14 +1387,14 @@ export default function DashboardPage() {
               </label>
 
               <div className="advanced-block">
-                <p className="section-subtitle">Step B · Storage</p>
+                <p className="section-subtitle">Step B · Clone Destination (outside this repo)</p>
                 <label className="field">
                   Local Workspace Path
                   <div className="path-picker-row">
                     <input
                       value={workspacePath}
                       onChange={(event) => setWorkspacePath(event.target.value)}
-                      placeholder="./workspace/repos"
+                      placeholder="C:\\Users\\<you>\\repos"
                       required
                     />
                     <button type="button" className="ghost-button" onClick={handleLocateFolder}>
