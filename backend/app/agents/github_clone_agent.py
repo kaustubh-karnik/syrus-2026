@@ -1,5 +1,6 @@
 from typing import Any, Dict
 from pathlib import Path
+import os
 
 from app.config import PROJECT_ROOT, settings, resolve_path_to_absolute
 from app.agents.docker_autofix_agent import run_docker_autofix_after_clone
