@@ -1,0 +1,235 @@
+================================================================================
+SETUP GUIDE - SYRUS 2026
+================================================================================
+
+This document explains:
+- How the path resolution works
+- How to set up the system
+- How to use it on macOS and Windows
+
+================================================================================
+THE SOLUTION
+================================================================================
+
+PROBLEM:
+  - Hardcoded Windows path in .env (C:\Users\...)
+  - Doesn't work on macOS
+  - Complex fallback logic
+
+SOLUTION:
+  - Removed hardcoded path from config
+  - User selects path via frontend form
+  - Works on all platforms (macOS, Windows, Linux)
+
+Code changes:
+  ✅ backend/app/config.py
+     - New: resolve_path_to_absolute(path, base_for_relative)
+     - Removed: Windows path detection
+
+  ✅ backend/app/agents/github_clone_agent.py
+     - Uses frontend input directly
+     - Removed: REPOS_BASE_DIR fallback
+
+================================================================================
+SETUP (3 STEPS)
+================================================================================
+
+STEP 1: Clean .env
+────────────────────────────────────────────────────────────────────────────
+
+  Delete or comment out:
+  REPOS_BASE_DIR=C:\Users\Kaustubh\kk\Coding
+
+  You don't need REPOS_BASE_DIR in .env anymore!
+
+STEP 2: Backend Setup
+────────────────────────────────────────────────────────────────────────────
+
+  macOS / Linux:
+  ─────────────
+    cd backend
+    python -m venv .venv
+    source .venv/bin/activate
+    pip install -r ../requirements.txt
+    python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  Windows (Command Prompt):
+  ────────────────────────
+    cd backend
+    python -m venv .venv
+    .venv\Scripts\activate
+    pip install -r ..\requirements.txt
+    python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  Windows (PowerShell):
+  ────────────────────
+    cd backend
+    python -m venv .venv
+    .\.venv\Scripts\Activate.ps1
+    pip install -r ..\requirements.txt
+    python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+STEP 3: Frontend Setup
+────────────────────────────────────────────────────────────────────────────
+
+  macOS / Linux / Windows (all same):
+  ──────────────────────────────────
+    cd frontend/nextjs
+    npm install
+    npm run dev
+
+  Then open: http://localhost:3000
+
+================================================================================
+USING THE SYSTEM
+================================================================================
+
+The frontend form has:
+  - GitHub Repository URL
+  - Target Branch
+  - Folder Name
+  - Local Workspace Path  ← You control this!
+
+Local Workspace Path options:
+
+  Relative path (resolved relative to project root):
+    ./GitHub          → PROJECT_ROOT/GitHub/repo
+    ./repos           → PROJECT_ROOT/repos/repo
+    repos             → PROJECT_ROOT/repos/repo
+
+  Absolute path:
+    /Users/prativa/Documents/Code        → /Users/.../Code/repo
+    C:\Users\Username\Code\Repos         → C:\Users\...\Repos\repo
+
+  Home directory:
+    ~/code/repos                         → /Users/prativa/code/repos/repo
+    ~\code\repos                         → C:\Users\prativa\code\repos\repo
+
+  Leave blank (uses default):
+    (empty)           → PROJECT_ROOT/repos/repo
+
+================================================================================
+VERIFICATION
+================================================================================
+
+After cloning, verify:
+
+1. Check logs show absolute path:
+   [CloneAgent] localStorageResolved (absolute)=/path/to/clone/location
+   [CloneAgent] os.path.isabs(localStorageResolved)=True
+
+2. Check folder exists:
+
+   macOS / Linux:
+   ls -la ./GitHub/shopstack-platform_testing
+
+   Windows (Command Prompt):
+   dir .\GitHub\shopstack-platform_testing
+
+   Windows (PowerShell):
+   Get-ChildItem -Path .\GitHub\shopstack-platform_testing
+
+3. Verify it's in the right location (not PROJECT_ROOT/backend/C:/)
+
+================================================================================
+ENVIRONMENT VARIABLES
+================================================================================
+
+Required in .env:
+  - JIRA_URL
+  - JIRA_EMAIL
+  - JIRA_API_TOKEN
+  - GROQ_API_KEY
+  - SUPABASE_URL
+  - GITHUB_TOKEN
+  - GITHUB_REPO
+  - OPENROUTER_API_KEY
+
+NOT NEEDED anymore:
+  - REPOS_BASE_DIR (removed - user controls via frontend)
+
+Optional:
+  - TARGET_REPO_PATH (for default repo location)
+  - TARGET_REPO_ID (for repo identification)
+
+================================================================================
+TROUBLESHOOTING
+================================================================================
+
+Backend won't start:
+  macOS: Make sure .venv/bin/activate was run
+  Windows: Make sure .venv\Scripts\activate was run
+  Check Python version: python --version (need 3.13+)
+
+Frontend won't start:
+  Check Node is installed: node --version (need 18+)
+  Check npm packages installed: npm list
+  Try: npm install && npm run dev
+
+Repos cloning to wrong location:
+  Check logs for: [CloneAgent] localStorageResolved
+  Should be an absolute path, not containing "C:\" or backslashes on macOS
+  Verify "Local Workspace Path" in frontend form is filled correctly
+
+================================================================================
+COMMANDS REFERENCE
+================================================================================
+
+Backend:
+  Start:   python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+  Stop:    Ctrl+C
+  Logs:    Check terminal output
+
+Frontend:
+  Start:   npm run dev
+  Stop:    Ctrl+C
+  Open:    http://localhost:3000
+
+Database:
+  No database - uses Supabase (configured in .env)
+
+Code style:
+  Python: Follow PEP 8
+  TypeScript: Follow ESLint config in frontend
+
+Git workflow:
+  Branch: Create feature branch from main
+  Commit: Clear message describing changes
+  PR: Submit for review
+
+================================================================================
+WHAT'S NEW
+================================================================================
+
+Changes made to fix cross-platform path issues:
+
+1. Removed hardcoded REPOS_BASE_DIR from config
+   - Was: REPOS_BASE_DIR=C:\Users\... (Windows-only)
+   - Now: User selects via frontend
+
+2. Simplified path resolution
+   - Was: Complex Windows path detection
+   - Now: Simple resolve_path_to_absolute() function
+
+3. Better logging
+   - Shows absolute path being used
+   - Shows isabs() validation
+
+4. Frontend controls paths
+   - Not environment variables
+   - Not config files
+   - User interface
+
+================================================================================
+DONE!
+================================================================================
+
+Your Syrus 2026 setup is complete and ready to use!
+
+macOS: Works ✅
+Windows: Works ✅
+Linux: Works ✅
+
+Questions? Check README.md for full documentation.
+
+================================================================================

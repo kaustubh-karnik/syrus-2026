@@ -1500,6 +1500,12 @@ class GitHubMCPClient:
         local_path = os.path.join(base_dir, repo_id.replace("/", os.sep))
         git_dir = os.path.join(local_path, ".git")
 
+        # Log path resolution for debugging cross-platform issues
+        print(f"[GitHubClient] base_dir={base_dir}")
+        print(f"[GitHubClient] repo_id={repo_id}")
+        print(f"[GitHubClient] computed local_path={local_path}")
+        print(f"[GitHubClient] os.path.isabs(local_path)={os.path.isabs(local_path)}")
+
         if not os.path.exists(local_path):
             os.makedirs(os.path.dirname(local_path), exist_ok=True)
             _run_cmd(["git", "clone", repo_url, local_path])

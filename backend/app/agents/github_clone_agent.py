@@ -1,7 +1,7 @@
 from typing import Any, Dict
 from pathlib import Path
 
-from app.config import PROJECT_ROOT, settings
+from app.config import PROJECT_ROOT, settings, resolve_path_to_absolute
 from app.agents.docker_autofix_agent import run_docker_autofix_after_clone
 from app.mcp.github_client import (
     GitHubMCPClient,
@@ -9,54 +9,29 @@ from app.mcp.github_client import (
 )
 
 
-def _resolve_local_storage_path(raw_path: Any) -> str:
-    candidate_value = str(raw_path or "").strip()
-    if not candidate_value:
-        candidate_value = str(settings.REPOS_BASE_DIR or "C:/data/repos")
-
-    configured_base_value = str(settings.REPOS_BASE_DIR or "").strip()
-    configured_base_path = Path(configured_base_value).expanduser() if configured_base_value else None
-    configured_base_abs = (
-        configured_base_path.resolve()
-        if configured_base_path is not None and configured_base_path.is_absolute()
-        else None
-    )
-
-    candidate_path = Path(candidate_value).expanduser()
-    if candidate_path.is_absolute():
-        return str(candidate_path.resolve())
-
-    normalized_candidate = candidate_value.replace("\\", "/").strip()
-    normalized_rel = normalized_candidate
-    while normalized_rel.startswith("./"):
-        normalized_rel = normalized_rel[2:]
-    normalized_rel = normalized_rel.strip("/").strip()
-
-    if configured_base_abs is not None:
-        if not normalized_rel:
-            return str(configured_base_abs)
-
-        rel_leaf = Path(normalized_rel).name.strip()
-        if rel_leaf and rel_leaf.lower() == configured_base_abs.name.lower():
-            return str(configured_base_abs)
-
-        candidate_path = (configured_base_abs / normalized_rel).resolve()
-    else:
-        candidate_path = (PROJECT_ROOT / candidate_path).resolve()
-
-    return str(candidate_path)
-
-
 def clone_repository_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Clone a GitHub repository to a user-specified location.
+
+    The localStorageLocation is provided by the frontend form.
+    If not provided, defaults to ./repos relative to the project.
+    """
+    import os
+
     repo_id = (payload.get("repoId") or "").strip()
     repo_url = (payload.get("repoUrl") or "").strip()
     ref = (payload.get("ref") or "main").strip()
-    local_storage_input = (
-        payload.get("localStorageLocation")
-        or settings.REPOS_BASE_DIR
-        or "C:/data/repos"
-    )
-    local_storage = _resolve_local_storage_path(local_storage_input)
+
+    # Get the path from the frontend form (user-provided)
+    local_storage_input = (payload.get("localStorageLocation") or "").strip()
+
+    # If user didn't provide a path, use ./repos as default
+    if not local_storage_input:
+        local_storage_input = "./repos"
+
+    # Resolve to absolute path (relative to PROJECT_ROOT if relative path)
+    local_storage = resolve_path_to_absolute(local_storage_input, base_for_relative=str(PROJECT_ROOT))
+
     auto_run_docker = bool(
         payload.get("autoRunDocker")
         if payload.get("autoRunDocker") is not None
@@ -67,10 +42,11 @@ def clone_repository_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
         return {"status": "error", "message": "Missing required field: repoId"}
 
     print("\n[CloneAgent] Starting clone flow")
-    print(
-        f"[CloneAgent] repoId={repo_id} ref={ref} "
-        f"localStorageInput={local_storage_input} localStorageResolved={local_storage}"
-    )
+    print(f"[CloneAgent] repoId={repo_id}")
+    print(f"[CloneAgent] ref={ref}")
+    print(f"[CloneAgent] localStorageInput (from frontend)={local_storage_input}")
+    print(f"[CloneAgent] localStorageResolved (absolute)={local_storage}")
+    print(f"[CloneAgent] os.path.isabs(localStorageResolved)={os.path.isabs(local_storage)}")
 
     if not repo_url:
         github_repo = (settings.GITHUB_REPO or "").strip()
