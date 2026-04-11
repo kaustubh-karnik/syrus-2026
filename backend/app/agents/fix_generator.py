@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import requests
+from cerebras.cloud.sdk import Cerebras
 
 from app.agents.state import AgentState
 from app.config import settings
@@ -26,8 +27,19 @@ MAX_REANCHOR_FILE_CONTEXT_CHARS = 48000
 FIX_GENERATION_MAX_TOKENS = 9000
 REANCHOR_MAX_TOKENS = 7200
 
+_cerebras_client: Cerebras | None = None
+
+
+def _get_cerebras_client() -> Cerebras:
+    global _cerebras_client
+    if _cerebras_client is None:
+        _cerebras_client = Cerebras(api_key=settings.CEREBRAS_API_KEY)
+    return _cerebras_client
+
 
 def _active_llm_label() -> str:
+    if settings.CEREBRAS_API_KEY:
+        return f"Cerebras ({settings.CEREBRAS_MODEL})"
     if settings.OPENROUTER_API_KEY:
         return f"OpenRouter ({settings.OPENROUTER_MODEL})"
     if settings.GROQ_API_KEY:
@@ -36,35 +48,20 @@ def _active_llm_label() -> str:
 
 
 def _chat_completion(prompt: str, temperature: float, max_tokens: int) -> str:
-    if settings.OPENROUTER_API_KEY:
-        headers = {
-            "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
-            "Content-Type": "application/json",
-            "X-Title": settings.OPENROUTER_APP_NAME,
-        }
-        if settings.OPENROUTER_HTTP_REFERER:
-            headers["HTTP-Referer"] = settings.OPENROUTER_HTTP_REFERER
-
-        payload = {
-            "model": settings.OPENROUTER_MODEL,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        }
-
+    if settings.CEREBRAS_API_KEY:
         last_exc: Exception | None = None
         for attempt in range(1, OPENROUTER_MAX_HTTP_RETRIES + 1):
             try:
                 started = time.time()
-                response = requests.post(
-                    f"{settings.OPENROUTER_BASE_URL.rstrip('/')}/chat/completions",
-                    headers=headers,
-                    json=payload,
-                    timeout=(OPENROUTER_CONNECT_TIMEOUT_SECONDS, OPENROUTER_READ_TIMEOUT_SECONDS),
+                response = _get_cerebras_client().chat.completions.create(
+                    model=settings.CEREBRAS_MODEL,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=temperature,
+                    max_completion_tokens=max_tokens,
                 )
-                response.raise_for_status()
-                body = response.json()
-                content = body.get("choices", [{}])[0].get("message", {}).get("content")
+                content = None
+                if response.choices:
+                    content = response.choices[0].message.content
                 if content is None:
                     raise ValueError("LLM returned empty message content")
                 if isinstance(content, list):
@@ -86,8 +83,53 @@ def _chat_completion(prompt: str, temperature: float, max_tokens: int) -> str:
                 print(f"   LLM call attempt {attempt}/{OPENROUTER_MAX_HTTP_RETRIES} failed: {exc}")
                 if attempt < OPENROUTER_MAX_HTTP_RETRIES:
                     time.sleep(1.0)
+            except Exception as exc:
+                last_exc = exc
+                print(f"   LLM call attempt {attempt}/{OPENROUTER_MAX_HTTP_RETRIES} failed: {exc}")
+                if attempt < OPENROUTER_MAX_HTTP_RETRIES:
+                    time.sleep(1.0)
 
-        raise RuntimeError(f"OpenRouter call failed after retries: {last_exc}")
+        raise RuntimeError(f"Cerebras call failed after retries: {last_exc}")
+
+    if settings.OPENROUTER_API_KEY:
+        headers = {
+            "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+            "Content-Type": "application/json",
+            "X-Title": settings.OPENROUTER_APP_NAME,
+        }
+        if settings.OPENROUTER_HTTP_REFERER:
+            headers["HTTP-Referer"] = settings.OPENROUTER_HTTP_REFERER
+
+        payload = {
+            "model": settings.OPENROUTER_MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+
+        response = requests.post(
+            f"{settings.OPENROUTER_BASE_URL.rstrip('/')}/chat/completions",
+            headers=headers,
+            json=payload,
+            timeout=(OPENROUTER_CONNECT_TIMEOUT_SECONDS, OPENROUTER_READ_TIMEOUT_SECONDS),
+        )
+        response.raise_for_status()
+        body = response.json()
+        content = body.get("choices", [{}])[0].get("message", {}).get("content")
+        if content is None:
+            raise ValueError("LLM returned empty message content")
+        if isinstance(content, list):
+            parts = []
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    parts.append(item.get("text", ""))
+                elif isinstance(item, str):
+                    parts.append(item)
+            content = "\n".join(part for part in parts if part)
+        content = str(content)
+        if not content.strip():
+            raise ValueError("LLM returned blank message content")
+        return content
 
     if settings.GROQ_API_KEY:
         from groq import Groq
@@ -101,7 +143,7 @@ def _chat_completion(prompt: str, temperature: float, max_tokens: int) -> str:
         )
         return response.choices[0].message.content
 
-    raise RuntimeError("No LLM key configured. Set OPENROUTER_API_KEY or GROQ_API_KEY.")
+    raise RuntimeError("No LLM key configured. Set CEREBRAS_API_KEY, OPENROUTER_API_KEY, or GROQ_API_KEY.")
 
 
 def _extract_description(ticket: dict) -> str:

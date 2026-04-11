@@ -8,6 +8,8 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 class Settings(BaseSettings):
     OPENAI_API_KEY: Optional[str] = None
     GROQ_API_KEY: str
+    CEREBRAS_API_KEY: Optional[str] = None
+    CEREBRAS_MODEL: str = "qwen-3-235b-a22b-instruct-2507"
     OPENROUTER_API_KEY: Optional[str] = None
     OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
     OPENROUTER_MODEL: str = "qwen/qwen3-32b"

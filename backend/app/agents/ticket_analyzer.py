@@ -3,9 +3,22 @@ from app.agents.state import AgentState
 import json
 import re
 import requests
+from cerebras.cloud.sdk import Cerebras
+
+
+_cerebras_client: Cerebras | None = None
+
+
+def _get_cerebras_client() -> Cerebras:
+    global _cerebras_client
+    if _cerebras_client is None:
+        _cerebras_client = Cerebras(api_key=settings.CEREBRAS_API_KEY)
+    return _cerebras_client
 
 
 def _active_llm_label() -> str:
+    if settings.CEREBRAS_API_KEY:
+        return f"Cerebras ({settings.CEREBRAS_MODEL})"
     if settings.OPENROUTER_API_KEY:
         return f"OpenRouter ({settings.OPENROUTER_MODEL})"
     if settings.GROQ_API_KEY:
@@ -14,6 +27,31 @@ def _active_llm_label() -> str:
 
 
 def _chat_completion(prompt: str, temperature: float, max_tokens: int) -> str:
+    if settings.CEREBRAS_API_KEY:
+        response = _get_cerebras_client().chat.completions.create(
+            model=settings.CEREBRAS_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=temperature,
+            max_completion_tokens=max_tokens,
+        )
+        content = None
+        if response.choices:
+            content = response.choices[0].message.content
+        if content is None:
+            raise ValueError("LLM returned empty message content")
+        if isinstance(content, list):
+            parts = []
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    parts.append(item.get("text", ""))
+                elif isinstance(item, str):
+                    parts.append(item)
+            content = "\n".join(part for part in parts if part)
+        content = str(content)
+        if not content.strip():
+            raise ValueError("LLM returned blank message content")
+        return content
+
     if settings.OPENROUTER_API_KEY:
         headers = {
             "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
@@ -51,7 +89,7 @@ def _chat_completion(prompt: str, temperature: float, max_tokens: int) -> str:
         )
         return response.choices[0].message.content
 
-    raise RuntimeError("No LLM key configured. Set OPENROUTER_API_KEY or GROQ_API_KEY.")
+    raise RuntimeError("No LLM key configured. Set CEREBRAS_API_KEY, OPENROUTER_API_KEY, or GROQ_API_KEY.")
 
 
 def _parse_analysis_json(raw: str) -> dict:
