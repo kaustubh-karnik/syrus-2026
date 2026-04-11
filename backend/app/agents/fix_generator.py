@@ -1,8 +1,9 @@
 import json
+import random
 import re
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import requests
 from cerebras.cloud.sdk import Cerebras
@@ -26,6 +27,9 @@ OPENROUTER_MAX_HTTP_RETRIES = 2
 MAX_REANCHOR_FILE_CONTEXT_CHARS = 48000
 FIX_GENERATION_MAX_TOKENS = 9000
 REANCHOR_MAX_TOKENS = 7200
+MAX_PARSE_RETRY_ATTEMPTS = 2
+LLM_BACKOFF_BASE_SECONDS = 0.8
+LLM_BACKOFF_MAX_SECONDS = 8.0
 
 _cerebras_client: Cerebras | None = None
 
@@ -47,103 +51,246 @@ def _active_llm_label() -> str:
     return "No LLM configured"
 
 
-def _chat_completion(prompt: str, temperature: float, max_tokens: int) -> str:
+class LLMOrchestrationError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        failure_type: str,
+        providers_used: list[str],
+        provider_attempts: list[dict],
+        llm_failures: list[dict],
+    ) -> None:
+        super().__init__(message)
+        self.failure_type = failure_type
+        self.providers_used = providers_used
+        self.provider_attempts = provider_attempts
+        self.llm_failures = llm_failures
+
+
+def _normalize_llm_content(content: Any) -> str:
+    if content is None:
+        raise ValueError("LLM returned empty message content")
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                parts.append(item.get("text", ""))
+            elif isinstance(item, str):
+                parts.append(item)
+        content = "\n".join(part for part in parts if part)
+    content = str(content)
+    if not content.strip():
+        raise ValueError("LLM returned blank message content")
+    return content
+
+
+def _backoff_seconds(attempt: int) -> float:
+    return min(
+        LLM_BACKOFF_MAX_SECONDS,
+        LLM_BACKOFF_BASE_SECONDS * (2 ** max(0, attempt - 1)) + random.uniform(0.0, 0.35),
+    )
+
+
+def _classify_llm_exception(exc: Exception) -> tuple[str, bool]:
+    message = str(exc).lower()
+
+    if "rate limit" in message or "429" in message or "too many requests" in message:
+        return "rate_limit", True
+
+    if isinstance(exc, requests.Timeout) or "timeout" in message:
+        return "timeout", True
+
+    if isinstance(exc, requests.ConnectionError):
+        return "connection_error", True
+
+    if isinstance(exc, requests.HTTPError):
+        if "5" in message:
+            return "provider_http_error", True
+        return "provider_http_error", False
+
+    if "empty message content" in message or "blank message content" in message:
+        return "empty_output", False
+
+    return "provider_error", False
+
+
+def _call_cerebras(prompt: str, temperature: float, max_tokens: int) -> str:
+    response = _get_cerebras_client().chat.completions.create(
+        model=settings.CEREBRAS_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=temperature,
+        max_completion_tokens=max_tokens,
+    )
+    content = response.choices[0].message.content if response.choices else None
+    return _normalize_llm_content(content)
+
+
+def _call_openrouter(prompt: str, temperature: float, max_tokens: int) -> str:
+    headers = {
+        "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "X-Title": settings.OPENROUTER_APP_NAME,
+    }
+    if settings.OPENROUTER_HTTP_REFERER:
+        headers["HTTP-Referer"] = settings.OPENROUTER_HTTP_REFERER
+
+    payload = {
+        "model": settings.OPENROUTER_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+
+    response = requests.post(
+        f"{settings.OPENROUTER_BASE_URL.rstrip('/')}/chat/completions",
+        headers=headers,
+        json=payload,
+        timeout=(OPENROUTER_CONNECT_TIMEOUT_SECONDS, OPENROUTER_READ_TIMEOUT_SECONDS),
+    )
+    response.raise_for_status()
+    body = response.json()
+    content = body.get("choices", [{}])[0].get("message", {}).get("content")
+    return _normalize_llm_content(content)
+
+
+def _call_groq(prompt: str, temperature: float, max_tokens: int) -> str:
+    from groq import Groq
+
+    groq_client = Groq(api_key=settings.GROQ_API_KEY)
+    response = groq_client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )
+    content = response.choices[0].message.content if response.choices else None
+    return _normalize_llm_content(content)
+
+
+def _provider_sequence() -> list[tuple[str, Callable[[str, float, int], str]]]:
+    providers: list[tuple[str, Callable[[str, float, int], str]]] = []
     if settings.CEREBRAS_API_KEY:
-        last_exc: Exception | None = None
-        for attempt in range(1, OPENROUTER_MAX_HTTP_RETRIES + 1):
-            try:
-                started = time.time()
-                response = _get_cerebras_client().chat.completions.create(
-                    model=settings.CEREBRAS_MODEL,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=temperature,
-                    max_completion_tokens=max_tokens,
-                )
-                content = None
-                if response.choices:
-                    content = response.choices[0].message.content
-                if content is None:
-                    raise ValueError("LLM returned empty message content")
-                if isinstance(content, list):
-                    parts = []
-                    for item in content:
-                        if isinstance(item, dict) and item.get("type") == "text":
-                            parts.append(item.get("text", ""))
-                        elif isinstance(item, str):
-                            parts.append(item)
-                    content = "\n".join(part for part in parts if part)
-                content = str(content)
-                if not content.strip():
-                    raise ValueError("LLM returned blank message content")
-                elapsed = round(time.time() - started, 2)
-                print(f"   LLM response received in {elapsed}s")
-                return content
-            except (requests.Timeout, requests.ConnectionError, requests.HTTPError, ValueError) as exc:
-                last_exc = exc
-                print(f"   LLM call attempt {attempt}/{OPENROUTER_MAX_HTTP_RETRIES} failed: {exc}")
-                if attempt < OPENROUTER_MAX_HTTP_RETRIES:
-                    time.sleep(1.0)
-            except Exception as exc:
-                last_exc = exc
-                print(f"   LLM call attempt {attempt}/{OPENROUTER_MAX_HTTP_RETRIES} failed: {exc}")
-                if attempt < OPENROUTER_MAX_HTTP_RETRIES:
-                    time.sleep(1.0)
-
-        raise RuntimeError(f"Cerebras call failed after retries: {last_exc}")
-
+        providers.append(("cerebras", _call_cerebras))
     if settings.OPENROUTER_API_KEY:
-        headers = {
-            "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
-            "Content-Type": "application/json",
-            "X-Title": settings.OPENROUTER_APP_NAME,
-        }
-        if settings.OPENROUTER_HTTP_REFERER:
-            headers["HTTP-Referer"] = settings.OPENROUTER_HTTP_REFERER
-
-        payload = {
-            "model": settings.OPENROUTER_MODEL,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        }
-
-        response = requests.post(
-            f"{settings.OPENROUTER_BASE_URL.rstrip('/')}/chat/completions",
-            headers=headers,
-            json=payload,
-            timeout=(OPENROUTER_CONNECT_TIMEOUT_SECONDS, OPENROUTER_READ_TIMEOUT_SECONDS),
-        )
-        response.raise_for_status()
-        body = response.json()
-        content = body.get("choices", [{}])[0].get("message", {}).get("content")
-        if content is None:
-            raise ValueError("LLM returned empty message content")
-        if isinstance(content, list):
-            parts = []
-            for item in content:
-                if isinstance(item, dict) and item.get("type") == "text":
-                    parts.append(item.get("text", ""))
-                elif isinstance(item, str):
-                    parts.append(item)
-            content = "\n".join(part for part in parts if part)
-        content = str(content)
-        if not content.strip():
-            raise ValueError("LLM returned blank message content")
-        return content
-
+        providers.append(("openrouter", _call_openrouter))
     if settings.GROQ_API_KEY:
-        from groq import Groq
+        providers.append(("groq", _call_groq))
+    return providers
 
-        groq_client = Groq(api_key=settings.GROQ_API_KEY)
-        response = groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=temperature,
-            max_tokens=max_tokens,
+
+def _provider_sequence_with_strategy(provider_strategy: Optional[dict]) -> list[tuple[str, Callable[[str, float, int], str]]]:
+    base = _provider_sequence()
+    if not provider_strategy:
+        return base
+
+    provider_map = {name: fn for name, fn in base}
+    preferred_order = [str(name).strip().lower() for name in (provider_strategy.get("preferred_provider_order") or []) if str(name).strip()]
+    avoid = {str(name).strip().lower() for name in (provider_strategy.get("avoid_providers") or []) if str(name).strip()}
+
+    ordered_names: list[str] = []
+    for name in preferred_order:
+        if name in provider_map and name not in ordered_names and name not in avoid:
+            ordered_names.append(name)
+
+    for name, _ in base:
+        if name not in ordered_names and name not in avoid:
+            ordered_names.append(name)
+
+    return [(name, provider_map[name]) for name in ordered_names if name in provider_map]
+
+
+def _chat_completion(
+    prompt: str,
+    temperature: float,
+    max_tokens: int,
+    *,
+    max_retries_per_provider: int,
+    provider_strategy: Optional[dict] = None,
+) -> dict:
+    providers = _provider_sequence_with_strategy(provider_strategy)
+    if not providers:
+        raise LLMOrchestrationError(
+            "No LLM key configured. Set CEREBRAS_API_KEY, OPENROUTER_API_KEY, or GROQ_API_KEY.",
+            failure_type="provider_unavailable",
+            providers_used=[],
+            provider_attempts=[],
+            llm_failures=[],
         )
-        return response.choices[0].message.content
 
-    raise RuntimeError("No LLM key configured. Set CEREBRAS_API_KEY, OPENROUTER_API_KEY, or GROQ_API_KEY.")
+    providers_used: list[str] = []
+    provider_attempts: list[dict] = []
+    llm_failures: list[dict] = []
+
+    for provider_name, provider_fn in providers:
+        if provider_name not in providers_used:
+            providers_used.append(provider_name)
+
+        for attempt in range(1, max_retries_per_provider + 1):
+            started = time.time()
+            try:
+                content = provider_fn(prompt, temperature, max_tokens)
+                elapsed = round(time.time() - started, 2)
+                provider_attempts.append(
+                    {
+                        "provider": provider_name,
+                        "attempt": attempt,
+                        "success": True,
+                        "elapsed_seconds": elapsed,
+                    }
+                )
+                print(f"   LLM response from {provider_name} in {elapsed}s")
+                return {
+                    "content": content,
+                    "provider": provider_name,
+                    "providers_used": providers_used,
+                    "provider_attempts": provider_attempts,
+                    "llm_failures": llm_failures,
+                }
+            except Exception as exc:
+                elapsed = round(time.time() - started, 2)
+                failure_type, transient = _classify_llm_exception(exc)
+                failure = {
+                    "provider": provider_name,
+                    "attempt": attempt,
+                    "failure_type": failure_type,
+                    "error": str(exc),
+                    "transient": transient,
+                    "elapsed_seconds": elapsed,
+                }
+                llm_failures.append(failure)
+                provider_attempts.append(
+                    {
+                        "provider": provider_name,
+                        "attempt": attempt,
+                        "success": False,
+                        "failure_type": failure_type,
+                        "error": str(exc),
+                        "elapsed_seconds": elapsed,
+                    }
+                )
+                print(
+                    "   LLM call failed: "
+                    f"provider={provider_name} attempt={attempt}/{max_retries_per_provider} "
+                    f"failure_type={failure_type} error={exc}"
+                )
+
+                if transient and attempt < max_retries_per_provider:
+                    delay_seconds = _backoff_seconds(attempt)
+                    print(f"   Retrying {provider_name} after {round(delay_seconds, 2)}s backoff...")
+                    time.sleep(delay_seconds)
+                    continue
+
+                break
+
+    failure_type = llm_failures[-1]["failure_type"] if llm_failures else "llm_generation_failure"
+    raise LLMOrchestrationError(
+        "All configured LLM providers failed",
+        failure_type=failure_type,
+        providers_used=providers_used,
+        provider_attempts=provider_attempts,
+        llm_failures=llm_failures,
+    )
 
 
 def _extract_description(ticket: dict) -> str:
@@ -774,6 +921,109 @@ def _build_reanchor_prompt(
     return _sanitize_prompt_text("\n".join(prompt_parts))
 
 
+def _merge_unique_providers(target: list[str], incoming: list[str]) -> None:
+    for provider in incoming or []:
+        if provider and provider not in target:
+            target.append(provider)
+
+
+def _generate_fix_payload(
+    prompt: str,
+    *,
+    prior_confidence: float | None,
+    temperature: float,
+    max_tokens: int,
+    mode_label: str,
+    provider_strategy: Optional[dict] = None,
+) -> dict:
+    max_retries_per_provider = max(1, int(settings.LLM_MAX_GENERATION_RETRIES or 1))
+    max_parse_attempts = max(1, MAX_PARSE_RETRY_ATTEMPTS)
+
+    providers_used: list[str] = []
+    provider_attempts: list[dict] = []
+    llm_failures: list[dict] = []
+    last_error: Exception | None = None
+    last_failure_type = "llm_generation_failure"
+
+    for parse_attempt in range(1, max_parse_attempts + 1):
+        active_provider = "unknown"
+        try:
+            print(
+                f"   Calling LLM ({mode_label}) "
+                f"parse_attempt={parse_attempt}/{max_parse_attempts} "
+                f"provider_retries={max_retries_per_provider} temp={temperature} max_tokens={max_tokens}"
+            )
+            completion = _chat_completion(
+                prompt,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                max_retries_per_provider=max_retries_per_provider,
+                provider_strategy=provider_strategy,
+            )
+            active_provider = str(completion.get("provider") or "unknown")
+            _merge_unique_providers(providers_used, list(completion.get("providers_used") or []))
+            provider_attempts.extend(list(completion.get("provider_attempts") or []))
+            llm_failures.extend(list(completion.get("llm_failures") or []))
+
+            raw = str(completion.get("content") or "").strip()
+            raw = re.sub(r"```json|```", "", raw).strip()
+            raw = raw.replace("\t", "    ")
+            raw = _sanitize_prompt_text(raw)
+            if not raw:
+                raise ValueError("LLM returned blank response")
+
+            fix_data = _parse_llm_json(raw)
+            normalized = _normalize_fix_payload(fix_data, prior_confidence)
+            if not (normalized.get("edits") or []):
+                raise ValueError("LLM returned empty edit list")
+
+            normalized["llm_provider"] = active_provider
+            normalized["providers_used"] = providers_used
+            normalized["provider_attempts"] = provider_attempts
+            normalized["llm_failures"] = llm_failures
+            normalized["generation_attempts"] = parse_attempt
+            normalized["failure_type"] = None
+            normalized["provider_strategy"] = provider_strategy or {}
+            return normalized
+        except LLMOrchestrationError as exc:
+            last_error = exc
+            last_failure_type = exc.failure_type or "llm_generation_failure"
+            _merge_unique_providers(providers_used, exc.providers_used)
+            provider_attempts.extend(exc.provider_attempts)
+            llm_failures.extend(exc.llm_failures)
+            print(f"   LLM orchestration failed: failure_type={last_failure_type} error={exc}")
+            break
+        except Exception as exc:
+            last_error = exc
+            last_failure_type = "invalid_format" if isinstance(exc, ValueError) else "llm_generation_failure"
+            llm_failures.append(
+                {
+                    "provider": active_provider,
+                    "attempt": parse_attempt,
+                    "failure_type": last_failure_type,
+                    "error": str(exc),
+                    "transient": False,
+                }
+            )
+            print(f"   LLM {mode_label} parse attempt {parse_attempt} failed: {exc}")
+            if parse_attempt < max_parse_attempts:
+                continue
+
+    return {
+        "file": "unknown",
+        "primary_file": "unknown",
+        "edits": [],
+        "fixed_code": f"# {mode_label} failed",
+        "reason": f"Error generating fix: {str(last_error)}",
+        "confidence": 0.0,
+        "failure_type": last_failure_type,
+        "providers_used": providers_used,
+        "provider_attempts": provider_attempts,
+        "llm_failures": llm_failures,
+        "provider_strategy": provider_strategy or {},
+    }
+
+
 def generate_fix(
     ticket: dict,
     code_snippets: str,
@@ -783,6 +1033,7 @@ def generate_fix(
     retry_feedback: Optional[str] = None,
     fix_attempt: int = 1,
     analysis_terms: Optional[List[str]] = None,
+    provider_strategy: Optional[dict] = None,
 ) -> dict:
     """
     Generate a minimal fix for a bug ticket using retrieved code snippets and
@@ -803,48 +1054,14 @@ def generate_fix(
     )
     print(f"   Prompt prepared in {round(time.time() - prep_started, 2)}s")
 
-    generation_temperature = 0.08
-    generation_max_tokens = FIX_GENERATION_MAX_TOKENS
-    max_generation_attempts = max(1, int(settings.LLM_MAX_GENERATION_RETRIES or 1))
-    last_error: Exception | None = None
-
-    for generation_attempt in range(1, max_generation_attempts + 1):
-        try:
-            print(
-                "   Calling LLM "
-                f"(attempt={generation_attempt}/{max_generation_attempts}, "
-                f"temp={generation_temperature}, max_tokens={generation_max_tokens}, retries={OPENROUTER_MAX_HTTP_RETRIES})"
-            )
-            raw = _chat_completion(
-                prompt,
-                temperature=generation_temperature,
-                max_tokens=generation_max_tokens,
-            ).strip()
-            raw = re.sub(r"```json|```", "", raw).strip()
-            raw = raw.replace("\t", "    ")
-            raw = _sanitize_prompt_text(raw)
-
-            if not raw:
-                raise ValueError("LLM returned blank response")
-
-            fix_data = _parse_llm_json(raw)
-            normalized = _normalize_fix_payload(fix_data, prior_confidence)
-            if not (normalized.get("edits") or []):
-                raise ValueError("LLM returned empty edit list")
-            return normalized
-        except Exception as exc:
-            last_error = exc
-            print(f"   LLM generation attempt {generation_attempt} failed: {exc}")
-
-    print(f"Fix generation failed after retries: {last_error}")
-    return {
-        "file": "unknown",
-        "primary_file": "unknown",
-        "edits": [],
-        "fixed_code": "# Fix generation failed",
-        "reason": f"Error generating fix: {str(last_error)}",
-        "confidence": 0.0,
-    }
+    return _generate_fix_payload(
+        prompt,
+        prior_confidence=prior_confidence,
+        temperature=0.08,
+        max_tokens=FIX_GENERATION_MAX_TOKENS,
+        mode_label="fix generation",
+        provider_strategy=provider_strategy,
+    )
 
 
 def reanchor_fix(
@@ -852,54 +1069,21 @@ def reanchor_fix(
     retry_context: Dict[str, Any],
     prior_confidence: float | None = None,
     fix_attempt: int = 1,
+    provider_strategy: Optional[dict] = None,
 ) -> dict:
     prep_started = time.time()
     description = _extract_description(ticket)
     prompt = _build_reanchor_prompt(ticket=ticket, description=description, retry_context=retry_context)
     print(f"   Re-anchor prompt prepared in {round(time.time() - prep_started, 2)}s")
 
-    generation_temperature = 0.04
-    generation_max_tokens = REANCHOR_MAX_TOKENS
-    max_generation_attempts = max(1, int(settings.LLM_MAX_GENERATION_RETRIES or 1))
-    last_error: Exception | None = None
-
-    for generation_attempt in range(1, max_generation_attempts + 1):
-        try:
-            print(
-                "   Calling LLM for re-anchor "
-                f"(attempt={generation_attempt}/{max_generation_attempts}, "
-                f"temp={generation_temperature}, max_tokens={generation_max_tokens}, retries={OPENROUTER_MAX_HTTP_RETRIES})"
-            )
-            raw = _chat_completion(
-                prompt,
-                temperature=generation_temperature,
-                max_tokens=generation_max_tokens,
-            ).strip()
-            raw = re.sub(r"```json|```", "", raw).strip()
-            raw = raw.replace("\t", "    ")
-            raw = _sanitize_prompt_text(raw)
-
-            if not raw:
-                raise ValueError("LLM returned blank response")
-
-            fix_data = _parse_llm_json(raw)
-            normalized = _normalize_fix_payload(fix_data, prior_confidence)
-            if not (normalized.get("edits") or []):
-                raise ValueError("LLM returned empty edit list")
-            return normalized
-        except Exception as exc:
-            last_error = exc
-            print(f"   LLM re-anchor attempt {generation_attempt} failed: {exc}")
-
-    print(f"Re-anchor generation failed after retries: {last_error}")
-    return {
-        "file": "unknown",
-        "primary_file": "unknown",
-        "edits": [],
-        "fixed_code": "# Re-anchor generation failed",
-        "reason": f"Error re-anchoring fix: {str(last_error)}",
-        "confidence": 0.0,
-    }
+    return _generate_fix_payload(
+        prompt,
+        prior_confidence=prior_confidence,
+        temperature=0.04,
+        max_tokens=REANCHOR_MAX_TOKENS,
+        mode_label="re-anchor generation",
+        provider_strategy=provider_strategy,
+    )
 
 
 def _selected_file_retry_context(fix: dict, repo_path: str | None) -> Optional[Dict[str, Any]]:
@@ -959,6 +1143,7 @@ def fix_generator_node(state: AgentState) -> AgentState:
     retrieved_code = state.get("retrieved_code", "")
     retry_feedback = state.get("retry_feedback")
     retry_context = state.get("retry_context")
+    provider_strategy = retry_context.get("provider_strategy") if isinstance(retry_context, dict) else None
     fix_attempt = int(state.get("fix_attempt", 1) or 1)
     repo_path = state.get("repo_path")
     analysis_terms = []
@@ -977,6 +1162,10 @@ def fix_generator_node(state: AgentState) -> AgentState:
             "fix": None,
             "status": "fix_failed",
             "error": "No relevant code found to generate fix",
+            "failure_type": "retrieval_empty",
+            "providers_used": [],
+            "provider_attempts": [],
+            "llm_failures": [],
         }
 
     print("\nGenerating fix...")
@@ -991,6 +1180,8 @@ def fix_generator_node(state: AgentState) -> AgentState:
             print(f"   Top file candidate: {ranked_files[0].get('path')}")
     if retry_feedback:
         print("   Retry feedback detected; including prior errors in prompt")
+    if provider_strategy:
+        print(f"   Provider strategy override: {provider_strategy}")
 
     try:
         if retry_context and retry_context.get("mode") == "reanchor":
@@ -1000,6 +1191,7 @@ def fix_generator_node(state: AgentState) -> AgentState:
                 retry_context=retry_context,
                 prior_confidence=state.get("confidence"),
                 fix_attempt=fix_attempt,
+                provider_strategy=provider_strategy,
             )
         else:
             fix = generate_fix(
@@ -1011,6 +1203,7 @@ def fix_generator_node(state: AgentState) -> AgentState:
                 retry_feedback=retry_feedback,
                 fix_attempt=fix_attempt,
                 analysis_terms=analysis_terms,
+                provider_strategy=provider_strategy,
             )
 
             selected_file_context = _selected_file_retry_context(fix, repo_path)
@@ -1021,6 +1214,7 @@ def fix_generator_node(state: AgentState) -> AgentState:
                     retry_context=selected_file_context,
                     prior_confidence=fix.get("confidence"),
                     fix_attempt=fix_attempt,
+                    provider_strategy=provider_strategy,
                 )
                 if (refined_fix.get("edits") or []) and float(refined_fix.get("confidence", 0) or 0) > 0:
                     fix = refined_fix
@@ -1038,6 +1232,10 @@ def fix_generator_node(state: AgentState) -> AgentState:
                 "fix": fix,
                 "status": "fix_failed",
                 "error": error_msg,
+                "failure_type": str(fix.get("failure_type") or "invalid_patch_contract"),
+                "providers_used": list(fix.get("providers_used") or []),
+                "provider_attempts": list(fix.get("provider_attempts") or []),
+                "llm_failures": list(fix.get("llm_failures") or []),
             }
 
         print("Fix generated:")
@@ -1050,6 +1248,10 @@ def fix_generator_node(state: AgentState) -> AgentState:
             "fix": fix,
             "status": "fix_generated",
             "error": None,
+            "failure_type": None,
+            "providers_used": list(fix.get("providers_used") or []),
+            "provider_attempts": list(fix.get("provider_attempts") or []),
+            "llm_failures": list(fix.get("llm_failures") or []),
         }
 
     except Exception as exc:
@@ -1058,4 +1260,8 @@ def fix_generator_node(state: AgentState) -> AgentState:
             "fix": None,
             "status": "fix_failed",
             "error": f"Fix generation error: {str(exc)}",
+            "failure_type": "llm_generation_failure",
+            "providers_used": list(state.get("providers_used") or []),
+            "provider_attempts": list(state.get("provider_attempts") or []),
+            "llm_failures": list(state.get("llm_failures") or []),
         }

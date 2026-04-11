@@ -64,12 +64,43 @@ export interface TestReport {
   failure_reason?: string;
 }
 
+export interface ProviderAttemptReport {
+  provider?: string;
+  attempt?: number;
+  success?: boolean;
+  failure_type?: string;
+  error?: string;
+  elapsed_seconds?: number;
+}
+
+export interface PatchValidationReport {
+  success?: boolean;
+  status?: string;
+  errors?: string[];
+  validated_files?: string[];
+  validated_edit_count?: number;
+}
+
+export interface RecoveryReport {
+  decision?: string;
+  reason?: string;
+  failed_tests?: string[];
+}
+
 export interface TicketReport {
   ticket_key?: string;
   status?: string;
+  result_category?: string;
   success?: boolean;
   attempt_count?: number;
   error?: string;
+  failure_type?: string;
+  blocked_reason?: string;
+  providers_used?: string[];
+  provider_attempts?: ProviderAttemptReport[];
+  llm_failures?: Array<Record<string, unknown>>;
+  patch_validation?: PatchValidationReport;
+  recovery?: RecoveryReport;
   edit_reason?: string;
   edited_files?: string[];
   promoted_files?: string[];

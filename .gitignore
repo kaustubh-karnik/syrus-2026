@@ -58,6 +58,9 @@ dist/
 .sublime-workspace
 *.iml
 .project
+.agents
+.claude
+.windsurf
 .classpath
 .c9/
 *.launch

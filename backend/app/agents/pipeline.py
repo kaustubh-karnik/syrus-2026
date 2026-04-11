@@ -3,8 +3,10 @@ from pathlib import Path
 from langgraph.graph import END, StateGraph
 
 from app.agents.fix_generator import fix_generator_node
+from app.agents.patch_validator import patch_validator_node
 from app.agents.patch_code import patch_code_node
 from app.agents.create_pr import create_pr_node
+from app.agents.recovery_agent import recovery_agent_node
 from app.agents.sandbox_runner import sandbox_runner_node
 from app.agents.state import AgentState
 from app.agents.ticket_analyzer import ticket_analyzer_node
@@ -18,9 +20,19 @@ from app.config import settings
 
 
 SUCCESS_TERMINAL_STATUSES = {"sandbox_passed"}
+BLOCKED_TERMINAL_STATUSES = {"blocked_llm_failure"}
 DEFAULT_MAX_FIX_ATTEMPTS = 2
 NON_RETRYABLE_CATEGORIES = {"infra"}
 MAX_RETRY_FILE_CONTEXT_CHARS = 50000
+LLM_TRANSIENT_FAILURE_TYPES = {
+    "rate_limit",
+    "timeout",
+    "provider_unavailable",
+    "llm_generation_failure",
+    "provider_http_error",
+    "connection_error",
+}
+DEFAULT_PROVIDER_ORDER = ["cerebras", "openrouter", "groq"]
 
 
 def should_continue(state: AgentState) -> str:
@@ -29,8 +41,15 @@ def should_continue(state: AgentState) -> str:
     return "search_code"
 
 
+def should_validate_patch(state: AgentState) -> str:
+    if state.get("status") in {"fix_failed", "blocked_llm_failure"} or not state.get("fix"):
+        return "end"
+    return "validate_patch"
+
+
 def should_patch(state: AgentState) -> str:
-    if state.get("status") == "fix_failed" or not state.get("fix"):
+    patch_validation_result = state.get("patch_validation_result") or {}
+    if state.get("status") != "patch_validated" or not patch_validation_result.get("success"):
         return "end"
     return "patch_code"
 
@@ -47,14 +66,18 @@ def build_pipeline() -> StateGraph:
     graph.add_node("analyze_ticket", ticket_analyzer_node)
     graph.add_node("search_code", vector_search_node)
     graph.add_node("generate_fix", fix_generator_node)
+    graph.add_node("validate_patch", patch_validator_node)
     graph.add_node("patch_code", patch_code_node)
     graph.add_node("sandbox_runner", sandbox_runner_node)
+    graph.add_node("recovery_agent", recovery_agent_node)
     graph.set_entry_point("analyze_ticket")
     graph.add_conditional_edges("analyze_ticket", should_continue, {"search_code": "search_code", "end": END})
     graph.add_edge("search_code", "generate_fix")
-    graph.add_conditional_edges("generate_fix", should_patch, {"patch_code": "patch_code", "end": END})
+    graph.add_conditional_edges("generate_fix", should_validate_patch, {"validate_patch": "validate_patch", "end": END})
+    graph.add_conditional_edges("validate_patch", should_patch, {"patch_code": "patch_code", "end": END})
     graph.add_conditional_edges("patch_code", should_sandbox, {"sandbox_runner": "sandbox_runner", "end": END})
-    graph.add_edge("sandbox_runner", END)
+    graph.add_edge("sandbox_runner", "recovery_agent")
+    graph.add_edge("recovery_agent", END)
     return graph.compile()
 
 
@@ -98,12 +121,20 @@ def run_pipeline(
         "symbol_graph_summary": None,
         "remote_signals": None,
         "fix": None,
+        "patch_validation_result": None,
         "patch_result": None,
         "sandbox_result": None,
+        "recovery_result": None,
         "promotion_result": None,
         "retry_feedback": retry_feedback,
         "retry_context": retry_context,
         "fix_attempt": fix_attempt,
+        "providers_used": [],
+        "provider_attempts": [],
+        "llm_failures": [],
+        "failure_type": None,
+        "blocked_reason": None,
+        "decision_trace": [],
         "retry_category": None,
         "error": None,
         "status": "starting",
@@ -115,7 +146,9 @@ def run_pipeline(
 def _extract_retry_feedback(state: dict, attempt: int) -> str:
     fix = state.get("fix") or {}
     patch_result = state.get("patch_result") or {}
+    patch_validation_result = state.get("patch_validation_result") or {}
     sandbox_result = state.get("sandbox_result") or {}
+    recovery_result = state.get("recovery_result") or {}
 
     lines = [
         f"Attempt {attempt} failed.",
@@ -125,6 +158,16 @@ def _extract_retry_feedback(state: dict, attempt: int) -> str:
 
     if state.get("error"):
         lines.append(f"State error: {state.get('error')}")
+
+    if state.get("failure_type"):
+        lines.append(f"Failure type: {state.get('failure_type')}")
+
+    if state.get("providers_used"):
+        lines.append(f"LLM providers used: {state.get('providers_used')}")
+
+    llm_failures = state.get("llm_failures") or []
+    if llm_failures:
+        lines.append(f"LLM failures observed: {llm_failures[-5:]}")
 
     if fix:
         lines.append(
@@ -143,6 +186,14 @@ def _extract_retry_feedback(state: dict, attempt: int) -> str:
             lines.append(f"Applied edit summary: {patch_result.get('edit_results')}")
         if patch_result.get("anchor_diagnostics"):
             lines.append(f"Anchor diagnostics: {patch_result.get('anchor_diagnostics')}")
+
+    if patch_validation_result:
+        lines.append(
+            "Patch validator output: "
+            f"success={patch_validation_result.get('success')} "
+            f"status={patch_validation_result.get('status')} "
+            f"errors={patch_validation_result.get('errors')}"
+        )
 
     retrieval_context = state.get("retrieval_context") or {}
     if retrieval_context.get("validation_context"):
@@ -175,6 +226,12 @@ def _extract_retry_feedback(state: dict, attempt: int) -> str:
         if sandbox_result.get("test_error"):
             lines.append(f"Sandbox test stderr tail:\n{str(sandbox_result.get('test_error'))[-800:]}")
 
+    if recovery_result:
+        lines.append(
+            "Recovery decision: "
+            f"decision={recovery_result.get('decision')} reason={recovery_result.get('reason')}"
+        )
+
     lines.append(
         "Generate a corrected structured edit plan. Re-anchor every edit against the exact local file content "
         "and include all required files such as tests or migrations."
@@ -185,6 +242,8 @@ def _extract_retry_feedback(state: dict, attempt: int) -> str:
 
 def _should_retry(state: dict) -> bool:
     if state.get("status") in SUCCESS_TERMINAL_STATUSES:
+        return False
+    if state.get("status") in BLOCKED_TERMINAL_STATUSES:
         return False
     retry_category = str(state.get("retry_category") or "").strip().lower()
     return retry_category not in NON_RETRYABLE_CATEGORIES
@@ -232,8 +291,40 @@ def _retry_neighbor_paths(failed_edit: dict, retrieval_context: dict | None) -> 
     return neighbors
 
 
+def _build_provider_switch_context(state: dict) -> dict:
+    used = [str(item).strip().lower() for item in (state.get("providers_used") or []) if str(item).strip()]
+    ordered_unique: list[str] = []
+    for provider in [*used, *DEFAULT_PROVIDER_ORDER]:
+        if provider and provider not in ordered_unique:
+            ordered_unique.append(provider)
+
+    if len(ordered_unique) > 1:
+        preferred = ordered_unique[1:] + ordered_unique[:1]
+    else:
+        preferred = ordered_unique
+
+    failure_type = str(state.get("failure_type") or "llm_generation_failure")
+    return {
+        "mode": "provider_switch",
+        "provider_strategy": {
+            "preferred_provider_order": preferred,
+            "avoid_providers": [],
+            "reason": f"provider_switch_after_{failure_type}",
+        },
+        "previous_failures": (state.get("llm_failures") or [])[-10:],
+        "providers_used": used,
+    }
+
+
 def _build_retry_context(base_repo_path: str, state: dict) -> dict | None:
-    if str(state.get("retry_category") or "").strip().lower() != "reanchor":
+    retry_category = str(state.get("retry_category") or "").strip().lower()
+    failure_type = str(state.get("failure_type") or "").strip().lower()
+    recovery_result = state.get("recovery_result") or {}
+
+    if retry_category == "llm" or failure_type in LLM_TRANSIENT_FAILURE_TYPES or str(recovery_result.get("decision") or "") == "switch_provider":
+        return _build_provider_switch_context(state)
+
+    if retry_category != "reanchor":
         return None
 
     patch_result = state.get("patch_result") or {}
@@ -286,6 +377,7 @@ def run_pipeline_with_retries(
 ) -> dict:
     attempts = max(DEFAULT_MAX_FIX_ATTEMPTS, int(max_attempts or DEFAULT_MAX_FIX_ATTEMPTS))
     attempt_states: list[dict] = []
+    decision_trace: list[str] = []
     retry_feedback = initial_retry_feedback
     retry_context = None
     final_state: dict = {}
@@ -295,12 +387,9 @@ def run_pipeline_with_retries(
     if not base_target_repo:
         raise ValueError("Target repository path is required for pipeline retry execution")
 
-    last_workspace_info: dict | None = None
-
     for attempt in range(1, attempts + 1):
         print(f"\nPipeline attempt {attempt}/{attempts}")
         workspace_info = create_attempt_workspace(base_target_repo, ticket_key, attempt)
-        last_workspace_info = workspace_info
         final_state = run_pipeline(
             ticket,
             retry_feedback=retry_feedback,
@@ -309,6 +398,9 @@ def run_pipeline_with_retries(
             repo_path=workspace_info["workspace_path"],
             workspace_path=workspace_info["workspace_path"],
             retry_context=retry_context,
+        )
+        decision_trace.append(
+            f"attempt={attempt} status={final_state.get('status')} retry_category={final_state.get('retry_category')}"
         )
 
         if final_state.get("status") in SUCCESS_TERMINAL_STATUSES:
@@ -352,55 +444,32 @@ def run_pipeline_with_retries(
             print(f"Preserving failed attempt workspace for inspection: {preserved_path}")
 
         if is_success:
+            decision_trace.append(f"attempt={attempt} -> success")
             break
         if can_retry:
+            decision_trace.append(f"attempt={attempt} -> retry")
             retry_feedback = _extract_retry_feedback(final_state, attempt)
             retry_context = _build_retry_context(base_target_repo, final_state)
             continue
+        decision_trace.append(f"attempt={attempt} -> stop")
         break
 
     final_state = dict(final_state)
 
-    # If final attempt did not pass sandbox but produced a patch, promote and create PR anyway.
-    final_patch_result = final_state.get("patch_result") or {}
-    has_final_patch = bool(final_patch_result.get("success"))
-    has_promotion = bool((final_state.get("promotion_result") or {}).get("success"))
-    final_status = str(final_state.get("status") or "")
-
-    if (
-        has_final_patch
-        and not has_promotion
-        and final_status not in SUCCESS_TERMINAL_STATUSES
-        and last_workspace_info is not None
-    ):
-        try:
-            promotion_result = promote_workspace_changes(
-                last_workspace_info["base_repo_path"],
-                last_workspace_info["workspace_path"],
-                final_patch_result.get("modified_files", []),
-                ticket_key,
-            )
-            final_state["promotion_result"] = promotion_result
-            if promotion_result.get("success"):
-                pr_state = create_pr_node(
-                    {
-                        **final_state,
-                        "base_repo_path": last_workspace_info["base_repo_path"],
-                        "repo_path": last_workspace_info["base_repo_path"],
-                    }
-                )
-                final_state["pr_result"] = pr_state.get("pr_result")
-                final_state["pr_status"] = pr_state.get("status")
-                final_state["pr_error"] = pr_state.get("error")
-            else:
-                final_state["pr_status"] = "pr_failed"
-                final_state["pr_error"] = "Patch promotion failed before PR creation"
-        except Exception as exc:
-            final_state["pr_status"] = "pr_failed"
-            final_state["pr_error"] = f"Post-failure PR flow failed: {exc}"
+    if str(final_state.get("status") or "") == "fix_failed":
+        final_state["status"] = "blocked_llm_failure"
+        final_state["failure_type"] = str(final_state.get("failure_type") or "llm_generation_failure")
+        final_state["blocked_reason"] = str(
+            final_state.get("blocked_reason")
+            or final_state.get("error")
+            or "Fix generation failed after configured retries/providers"
+        )
+        final_state["retry_category"] = "llm"
+        decision_trace.append("finalize -> blocked_llm_failure")
 
     if preserved_workspaces:
         final_state["preserved_workspaces"] = preserved_workspaces
+    final_state["decision_trace"] = decision_trace
     final_state["attempt_count"] = len(attempt_states)
     final_state["attempts"] = [
         {
@@ -408,8 +477,15 @@ def run_pipeline_with_retries(
             "status": state.get("status"),
             "error": state.get("error"),
             "retry_category": state.get("retry_category"),
+            "failure_type": state.get("failure_type"),
+            "blocked_reason": state.get("blocked_reason"),
+            "providers_used": state.get("providers_used"),
+            "provider_attempts": state.get("provider_attempts"),
+            "llm_failures": state.get("llm_failures"),
+            "patch_validation_result": state.get("patch_validation_result"),
             "patch_result": state.get("patch_result"),
             "sandbox_result": state.get("sandbox_result"),
+            "recovery_result": state.get("recovery_result"),
             "promotion_result": state.get("promotion_result"),
             "pr_result": state.get("pr_result"),
             "pr_status": state.get("pr_status"),

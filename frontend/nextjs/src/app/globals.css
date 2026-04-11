@@ -1279,6 +1279,86 @@ th {
   font-size: 10px;
 }
 
+.validation-detail-block {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-input);
+  background: rgba(8, 15, 27, 0.72);
+  padding: 8px;
+}
+
+.validation-detail-block > summary {
+  cursor: pointer;
+  color: #cbd5e1;
+  font-size: 11px;
+}
+
+.validation-detail-grid {
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.validation-detail-title {
+  margin-bottom: 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.validation-test-list {
+  margin: 0;
+  padding-left: 16px;
+  display: grid;
+  gap: 3px;
+}
+
+.validation-test-list li {
+  font-size: 11px;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.validation-test-list.passed li {
+  color: #a7f3d0;
+}
+
+.validation-test-list.failed li {
+  color: #fecaca;
+}
+
+.provider-switch-list {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid rgba(129, 140, 248, 0.45);
+  border-radius: var(--radius-input);
+  background: rgba(129, 140, 248, 0.1);
+  display: grid;
+  gap: 4px;
+}
+
+.provider-switch-list p {
+  margin: 0;
+  font-size: 12px;
+  color: #c7d2fe;
+}
+
+.llm-route-detail {
+  margin-top: 8px;
+}
+
+.llm-route-detail > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.provider-attempt-table td:nth-child(3) {
+  font-weight: 600;
+}
+
 .report-actions-bar {
   margin-top: var(--space-4);
   border: 1px solid var(--border);
@@ -1492,7 +1572,8 @@ pre {
   .pipeline-grid,
   .report-grid-2x2,
   .field-row,
-  .kv-grid {
+  .kv-grid,
+  .validation-detail-grid {
     grid-template-columns: 1fr;
   }
 

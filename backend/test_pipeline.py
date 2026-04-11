@@ -24,23 +24,88 @@ def _absolute_paths(repo_root: Path, rel_paths: list[str] | None) -> list[str]:
     return output
 
 
+def _classify_result_category(item: dict, state: dict) -> str:
+    status = str(item.get("status") or state.get("status") or "").strip().lower()
+    failure_type = str(state.get("failure_type") or "").strip().lower()
+    sandbox = state.get("sandbox_result") or {}
+
+    if status == "sandbox_passed":
+        return "success"
+
+    if status in {"blocked_llm_failure", "fix_failed"}:
+        return "blocked_llm_failure"
+
+    if status == "failed_tests":
+        return "failed_tests"
+
+    if status == "validation_failed":
+        return "validation_failed"
+
+    if failure_type in {"rate_limit", "timeout", "provider_unavailable", "llm_generation_failure"}:
+        return "blocked_llm_failure"
+
+    if status in {"match_failed", "file_resolution_failed", "schema_guard_failed", "syntax_error", "patch_failed", "blocked"}:
+        return "invalid_patch"
+
+    if status == "invalid_patch":
+        return "invalid_patch"
+
+    if failure_type in {"invalid_patch_contract", "invalid_format"}:
+        return "invalid_patch"
+
+    if status == "sandbox_failed":
+        if sandbox.get("failed_tests"):
+            return "failed_tests"
+        return "validation_failed"
+
+    if status == "sandbox_infra_failed":
+        return "infra_failed"
+
+    return "validation_failed"
+
+
 def _build_detailed_report(batch_result: dict, target_repo_root: Path) -> dict:
     ticket_reports: list[dict] = []
     for item in batch_result.get("results", []):
         state = item.get("result") or {}
+        fix = state.get("fix") or {}
+        recovery = state.get("recovery_result") or {}
+        patch_validation = state.get("patch_validation_result") or {}
         patch = state.get("patch_result") or {}
         promotion = state.get("promotion_result") or {}
         sandbox = state.get("sandbox_result") or {}
         pr_result = state.get("pr_result") or {}
+        providers_used = state.get("providers_used") or fix.get("providers_used") or []
+        provider_attempts = state.get("provider_attempts") or fix.get("provider_attempts") or []
+        llm_failures = state.get("llm_failures") or fix.get("llm_failures") or []
+        result_category = _classify_result_category(item, state)
 
         ticket_reports.append(
             {
                 "ticket_key": item.get("ticket_key"),
                 "status": item.get("status"),
+                "result_category": result_category,
                 "success": bool(item.get("success")),
                 "attempt_count": item.get("attempt_count", 1),
                 "error": item.get("error"),
+                "failure_type": state.get("failure_type"),
+                "blocked_reason": state.get("blocked_reason"),
+                "recovery": {
+                    "decision": recovery.get("decision"),
+                    "reason": recovery.get("reason"),
+                    "failed_tests": recovery.get("failed_tests") or [],
+                },
+                "providers_used": providers_used,
+                "provider_attempts": provider_attempts,
+                "llm_failures": llm_failures,
                 "edit_reason": patch.get("reason"),
+                "patch_validation": {
+                    "success": patch_validation.get("success"),
+                    "status": patch_validation.get("status"),
+                    "errors": patch_validation.get("errors") or [],
+                    "validated_files": patch_validation.get("validated_files") or [],
+                    "validated_edit_count": patch_validation.get("validated_edit_count"),
+                },
                 "edited_files": _absolute_paths(target_repo_root, patch.get("modified_files") or []),
                 "promoted_files": _absolute_paths(target_repo_root, promotion.get("promoted_files") or []),
                 "edit_details": [

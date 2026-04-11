@@ -228,6 +228,29 @@ function isTicketFailed(ticket: TicketReport): boolean {
   return ticket.success === false || status.includes("fail");
 }
 
+function isTicketValidationFailed(ticket: TicketReport): boolean {
+  const selectedCount = ticket.tests?.selected_tests?.length ?? 0;
+  const failedCount = ticket.tests?.failed_tests?.length ?? 0;
+
+  if (failedCount > 0) {
+    return true;
+  }
+
+  if (selectedCount > 0 && failedCount === 0) {
+    return false;
+  }
+
+  if (ticket.tests?.passed === true) {
+    return false;
+  }
+
+  if (ticket.tests?.passed === false) {
+    return true;
+  }
+
+  return isTicketFailed(ticket);
+}
+
 function formatTicketValidationResult(ticket: TicketReport): string {
   const selectedCount = ticket.tests?.selected_tests?.length ?? 0;
   const failedCount = ticket.tests?.failed_tests?.length ?? 0;
@@ -237,14 +260,86 @@ function formatTicketValidationResult(ticket: TicketReport): string {
   }
 
   if (selectedCount === 0) {
-    return isTicketFailed(ticket) ? "⚠ failed before tests" : "— no tests";
+    return isTicketValidationFailed(ticket) ? "⚠ failed before tests" : "— no tests";
   }
 
-  if (ticket.tests?.passed) {
+  if (failedCount === 0) {
     return "✓ pass";
   }
 
-  return isTicketFailed(ticket) ? "✗ fail" : "— no tests";
+  return isTicketValidationFailed(ticket) ? "✗ fail" : "— no tests";
+}
+
+function normalizeProvider(value: string | undefined): string {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (!normalized) return "unknown";
+  return normalized;
+}
+
+function deriveProviderSwitchEvents(ticket: TicketReport): Array<{ from: string; to: string; atAttempt: number | null; reason: string }> {
+  const attempts = ticket.provider_attempts ?? [];
+  const events: Array<{ from: string; to: string; atAttempt: number | null; reason: string }> = [];
+  let lastProvider = "";
+
+  for (const entry of attempts) {
+    const provider = normalizeProvider(entry.provider);
+    if (!provider || provider === "unknown") {
+      continue;
+    }
+    if (!lastProvider) {
+      lastProvider = provider;
+      continue;
+    }
+    if (provider !== lastProvider) {
+      events.push({
+        from: lastProvider,
+        to: provider,
+        atAttempt: typeof entry.attempt === "number" ? entry.attempt : null,
+        reason: String(entry.failure_type ?? "fallback").trim() || "fallback",
+      });
+      lastProvider = provider;
+    }
+  }
+
+  return events;
+}
+
+function findLastSuccessfulProvider(ticket: TicketReport): string | null {
+  const attempts = ticket.provider_attempts ?? [];
+  for (let index = attempts.length - 1; index >= 0; index -= 1) {
+    const item = attempts[index];
+    if (item.success) {
+      return normalizeProvider(item.provider);
+    }
+  }
+  return null;
+}
+
+function normalizeTestIdentifier(value: string): string {
+  return String(value ?? "").replace(/\\/g, "/").trim().toLowerCase();
+}
+
+function deriveTicketTestBreakdown(ticket: TicketReport): {
+  selected: string[];
+  failed: string[];
+  passed: string[];
+  failedOutsideSelection: string[];
+} {
+  const selected = (ticket.tests?.selected_tests ?? []).map((item) => String(item ?? "").trim()).filter(Boolean);
+  const failed = (ticket.tests?.failed_tests ?? []).map((item) => String(item ?? "").trim()).filter(Boolean);
+
+  const failedNormalized = new Set(failed.map(normalizeTestIdentifier));
+  const selectedNormalized = new Set(selected.map(normalizeTestIdentifier));
+
+  const passed = selected.filter((testName) => !failedNormalized.has(normalizeTestIdentifier(testName)));
+  const failedOutsideSelection = failed.filter((testName) => !selectedNormalized.has(normalizeTestIdentifier(testName)));
+
+  return {
+    selected,
+    failed,
+    passed,
+    failedOutsideSelection,
+  };
 }
 
 function pseudoDiffFromReport(report: PipelineReport | null): string[] {
@@ -353,6 +448,10 @@ function FeedbackBanner({ feedback }: { feedback: Feedback | null }) {
 
 function TicketReportAccordion({ item }: { item: TicketReport }) {
   const tests = item.tests ?? {};
+  const providerAttempts = item.provider_attempts ?? [];
+  const providersUsed = (item.providers_used ?? []).map((provider) => normalizeProvider(provider));
+  const providerSwitchEvents = deriveProviderSwitchEvents(item);
+  const lastSuccessfulProvider = findLastSuccessfulProvider(item);
 
   return (
     <details className="report-accordion">
@@ -400,6 +499,65 @@ function TicketReportAccordion({ item }: { item: TicketReport }) {
           <li>Failed tests: {safeToString(tests.failed_tests ?? [])}</li>
           <li>Test plan source: {safeToString(tests.test_plan_source ?? "N/A")}</li>
         </ul>
+
+        <h4>LLM Routing</h4>
+        <ul className="stack-list">
+          <li>Result category: {safeToString(item.result_category ?? "N/A")}</li>
+          <li>Failure type: {safeToString(item.failure_type ?? "N/A")}</li>
+          <li>Recovery decision: {safeToString(item.recovery?.decision ?? "N/A")}</li>
+          <li>Recovery reason: {safeToString(item.recovery?.reason ?? "N/A")}</li>
+          <li>
+            Providers used: {providersUsed.length > 0 ? providersUsed.join(" → ") : "N/A"}
+          </li>
+          <li>
+            Provider switches: {providerSwitchEvents.length > 0 ? providerSwitchEvents.length : 0}
+          </li>
+          <li>Last successful provider: {lastSuccessfulProvider ?? "N/A"}</li>
+        </ul>
+
+        {providerSwitchEvents.length > 0 ? (
+          <div className="provider-switch-list">
+            {providerSwitchEvents.map((event, idx) => (
+              <p key={`${item.ticket_key ?? "unknown"}-switch-${idx}`}>
+                ↺ switched {event.from} → {event.to}
+                {event.atAttempt ? ` (attempt ${event.atAttempt})` : ""}
+                {event.reason ? ` · reason=${event.reason}` : ""}
+              </p>
+            ))}
+          </div>
+        ) : null}
+
+        {providerAttempts.length > 0 ? (
+          <details className="llm-route-detail">
+            <summary>Provider attempt timeline ({providerAttempts.length})</summary>
+            <div className="table-shell">
+              <table className="provider-attempt-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Provider</th>
+                    <th>Outcome</th>
+                    <th>Failure Type</th>
+                    <th>Elapsed</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {providerAttempts.map((attempt, index) => (
+                    <tr key={`${item.ticket_key ?? "unknown"}-provider-attempt-${index}`}>
+                      <td>{safeToString(attempt.attempt ?? index + 1)}</td>
+                      <td>{normalizeProvider(attempt.provider)}</td>
+                      <td>{attempt.success ? "✓ success" : "✗ failed"}</td>
+                      <td>{safeToString(attempt.failure_type ?? "—")}</td>
+                      <td>
+                        {typeof attempt.elapsed_seconds === "number" ? `${attempt.elapsed_seconds.toFixed(2)}s` : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </details>
+        ) : null}
       </div>
     </details>
   );
@@ -534,7 +692,7 @@ export default function DashboardPage() {
       failed += failedCount;
       skipped += Math.max(0, selected - passedCount - failedCount);
 
-      if (isTicketFailed(ticket)) {
+      if (isTicketValidationFailed(ticket)) {
         ticketFailed += 1;
         if (failedCount === 0) {
           failedBeforeTests += 1;
@@ -1157,8 +1315,9 @@ export default function DashboardPage() {
       const reportTickets = lastRun.report?.tickets ?? [];
       const processed = Number(lastRun.report?.summary?.processed ?? reportTickets.length ?? 0);
       const successful = Number(lastRun.report?.summary?.successful ?? reportTickets.filter((ticket) => ticket.success === true).length);
-      const ticketFailures = reportTickets.filter((ticket) => isTicketFailed(ticket)).length;
+      const ticketFailures = reportTickets.filter((ticket) => isTicketValidationFailed(ticket)).length;
       const hasTicketFailures = ticketFailures > 0 || (processed > 0 && successful < processed);
+      const hasRenderedReport = Boolean(lastRun.report);
 
       const finalStatus = String(lastRun.status ?? "").toLowerCase();
       if (finalStatus === "stopped") {
@@ -1170,11 +1329,14 @@ export default function DashboardPage() {
       if (lastRun.exitCode === 0 && !hasTicketFailures) {
         completePipelineSteps(true);
         setPipelineFeedback({ tone: "success", message: "Pipeline completed successfully." });
-      } else if (lastRun.exitCode === 0 && hasTicketFailures) {
-        markRunningStepFailed();
+      } else if (hasRenderedReport) {
+        completePipelineSteps(true);
         setPipelineFeedback({
           tone: "warning",
-          message: `Pipeline finished with partial failures (${successful}/${processed} tickets successful).`,
+          message:
+            lastRun.exitCode === 0
+              ? `Pipeline finished with partial failures (${successful}/${processed} tickets successful).`
+              : `Pipeline finished with exit code ${safeToString(lastRun.exitCode)}.`,
           details: ticketFailures > 0 ? `${ticketFailures} ticket(s) failed before or during validation.` : undefined,
         });
       } else {
@@ -1810,20 +1972,69 @@ export default function DashboardPage() {
                           <th>Ticket</th>
                           <th>Result</th>
                           <th>Time</th>
+                          <th>Test Breakdown</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {(pipelineReport.tickets ?? []).map((ticket) => (
-                          <tr key={`validation-${ticket.ticket_key ?? "unknown"}`}>
-                            <td>{ticket.ticket_key ?? "UNKNOWN"}</td>
-                            <td>{formatTicketValidationResult(ticket)}</td>
-                            <td>
-                              {ticket.tests?.selected_tests?.length
-                                ? `${Math.max(0.04, ticket.tests.selected_tests.length * 0.04).toFixed(2)}s`
-                                : "—"}
-                            </td>
-                          </tr>
-                        ))}
+                        {(pipelineReport.tickets ?? []).map((ticket) => {
+                          const breakdown = deriveTicketTestBreakdown(ticket);
+                          return (
+                            <tr key={`validation-${ticket.ticket_key ?? "unknown"}`}>
+                              <td>{ticket.ticket_key ?? "UNKNOWN"}</td>
+                              <td>{formatTicketValidationResult(ticket)}</td>
+                              <td>
+                                {ticket.tests?.selected_tests?.length
+                                  ? `${Math.max(0.04, ticket.tests.selected_tests.length * 0.04).toFixed(2)}s`
+                                  : "—"}
+                              </td>
+                              <td>
+                                <details className="validation-detail-block">
+                                  <summary>
+                                    selected {breakdown.selected.length} · passed {breakdown.passed.length} · failed {breakdown.failed.length}
+                                  </summary>
+
+                                  {breakdown.selected.length === 0 && isTicketFailed(ticket) ? (
+                                    <p className="helper-text">This ticket failed before selected tests were available.</p>
+                                  ) : null}
+
+                                  <div className="validation-detail-grid">
+                                    <div>
+                                      <p className="validation-detail-title">Passed tests</p>
+                                      {breakdown.passed.length === 0 ? (
+                                        <p className="helper-text">None</p>
+                                      ) : (
+                                        <ul className="validation-test-list passed">
+                                          {breakdown.passed.map((testName, index) => (
+                                            <li key={`${ticket.ticket_key ?? "unknown"}-pass-${testName}-${index}`}>{testName}</li>
+                                          ))}
+                                        </ul>
+                                      )}
+                                    </div>
+
+                                    <div>
+                                      <p className="validation-detail-title">Failed tests</p>
+                                      {breakdown.failed.length === 0 ? (
+                                        <p className="helper-text">None</p>
+                                      ) : (
+                                        <ul className="validation-test-list failed">
+                                          {breakdown.failed.map((testName, index) => (
+                                            <li key={`${ticket.ticket_key ?? "unknown"}-fail-${testName}-${index}`}>{testName}</li>
+                                          ))}
+                                        </ul>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  {breakdown.failedOutsideSelection.length > 0 ? (
+                                    <p className="helper-text">
+                                      Failed tests not present in selected set: {breakdown.failedOutsideSelection.join(", ")}
+                                    </p>
+                                  ) : null}
+                                </details>
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>

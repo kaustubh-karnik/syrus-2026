@@ -52,7 +52,7 @@ def resolve_path_to_absolute(raw_path: Optional[str], base_for_relative: Optiona
 
 class Settings(BaseSettings):
     OPENAI_API_KEY: Optional[str] = None
-    GROQ_API_KEY: str
+    GROQ_API_KEY: Optional[str] = None
     CEREBRAS_API_KEY: Optional[str] = None
     CEREBRAS_MODEL: str = "qwen-3-235b-a22b-instruct-2507"
     OPENROUTER_API_KEY: Optional[str] = None
