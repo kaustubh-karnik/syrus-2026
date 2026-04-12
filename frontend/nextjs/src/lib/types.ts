@@ -59,9 +59,14 @@ export interface GithubRepositoryOverview {
 export interface TestReport {
   passed?: boolean;
   selected_tests?: string[];
+  passed_tests?: string[];
   failed_tests?: string[];
   test_plan_source?: string;
+  commands?: string[][];
+  pass_override_reason?: string | null;
   failure_reason?: string;
+  test_output?: string;
+  test_error?: string;
 }
 
 export interface ProviderAttemptReport {

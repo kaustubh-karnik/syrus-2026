@@ -124,9 +124,14 @@ def _build_detailed_report(batch_result: dict, target_repo_root: Path) -> dict:
                 "tests": {
                     "passed": bool(sandbox.get("success")),
                     "selected_tests": sandbox.get("selected_tests") or [],
+                    "passed_tests": sandbox.get("passed_tests") or [],
                     "failed_tests": sandbox.get("failed_tests") or [],
                     "test_plan_source": sandbox.get("test_plan_source"),
+                    "commands": sandbox.get("commands") or [],
+                    "pass_override_reason": sandbox.get("pass_override_reason"),
                     "failure_reason": sandbox.get("failure_reason") or sandbox.get("error"),
+                    "test_output": sandbox.get("test_output") or "",
+                    "test_error": sandbox.get("test_error") or "",
                 },
                 "pr": {
                     "status": state.get("pr_status"),

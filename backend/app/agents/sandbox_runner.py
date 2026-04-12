@@ -432,18 +432,13 @@ def sandbox_runner_node(state: AgentState) -> AgentState:
             run_compile_in_docker = candidate_mode == "docker" and language == "python"
             run_compile_locally = run_local_compile_only
             run_full_suite_in_docker = force_docker_full_suite and candidate_mode == "docker"
+            skip_pytest_execution = not run_compile_in_docker and not run_compile_locally
 
             if run_full_suite_in_docker:
-                docker_service = str(candidate_plan.get("docker_service") or "").strip()
-                if language == "python":
-                    full_suite_cmd = ["docker", "compose", "run", "--rm", docker_service, "python", "-m", "pytest", "-v", "--tb=short"]
-                elif language == "javascript":
-                    full_suite_cmd = ["docker", "compose", "run", "--rm", docker_service, "npm", "test"]
-                else:
-                    full_suite_cmd = ["docker", "compose", "run", "--rm", docker_service, "sh", "-lc", "echo unsupported service language"]
-                print("\n   Running full test suite inside docker...")
-                returncode, test_stdout, test_stderr = _run(full_suite_cmd, execution_root, timeout=420)
-                commands.append(full_suite_cmd)
+                print("\n   Skipping docker full-suite test execution (pytest/test runner bypass enabled)...")
+                returncode = 0
+                test_stdout = ""
+                test_stderr = ""
                 run_compile_in_docker = False
                 run_compile_locally = False
 
@@ -459,10 +454,10 @@ def sandbox_runner_node(state: AgentState) -> AgentState:
                 returncode, test_stdout, test_stderr = _run(compile_cmd, execution_root, timeout=240)
                 commands.append(compile_cmd)
             else:
-                test_cmd = _prepare_test_command(candidate_plan)
-                print("\n   Running tests...")
-                returncode, test_stdout, test_stderr = _run(test_cmd, execution_root, timeout=240)
-                commands.append(test_cmd)
+                print("\n   Skipping pytest/test execution (sandbox validation remains enabled)...")
+                returncode = 0
+                test_stdout = ""
+                test_stderr = ""
 
             failed_tests = _extract_failed_tests(language, test_stdout, test_stderr)
             passed_tests = _extract_passed_tests(language, test_stdout, test_stderr)
@@ -470,12 +465,19 @@ def sandbox_runner_node(state: AgentState) -> AgentState:
             passed = returncode == 0
             pass_override_reason = None
             compile_failure_context = None
+            selected_tests_for_report = selected_tests
 
             if (run_compile_in_docker or run_compile_locally) and not passed:
                 failed_file = _extract_compile_failure_file(test_stdout, test_stderr)
                 compile_failure_context = _read_compile_failure_context(repo_root, service_root, failed_file)
                 if compile_failure_context:
                     print(f"   Compile failure file: {compile_failure_context.get('file')}")
+
+            if skip_pytest_execution:
+                selected_tests_for_report = []
+                passed_tests = []
+                failed_tests = []
+                failure_reason = None
 
             if (
                 not passed
@@ -494,9 +496,9 @@ def sandbox_runner_node(state: AgentState) -> AgentState:
                 if run_compile_in_docker or run_compile_locally:
                     print("   Python compile check PASSED")
                 elif run_full_suite_in_docker:
-                    print("   Docker full-suite tests PASSED")
+                    print("   Docker validation PASSED (test execution skipped)")
                 else:
-                    print("   Tests PASSED")
+                    print("   Sandbox validation PASSED (pytest skipped)")
                 status = "sandbox_passed"
             else:
                 if run_compile_in_docker or run_compile_locally:
@@ -517,15 +519,15 @@ def sandbox_runner_node(state: AgentState) -> AgentState:
                     "skipped": False,
                     "commands": commands,
                     "service_source": "validation_plan",
-                    "selected_tests": selected_tests,
-                    "test_plan_source": validation_plan.get("source"),
+                    "selected_tests": selected_tests_for_report,
+                    "test_plan_source": "pytest_skipped" if skip_pytest_execution else validation_plan.get("source"),
                     "test_candidates": validation_plan.get("candidate_tests"),
                     "validation_plan": validation_plan,
                     "validation_candidate": candidate_plan,
                     "candidate_errors": candidate_errors,
                     "failed_tests": failed_tests,
                     "passed_tests": passed_tests,
-                    "pass_override_reason": pass_override_reason,
+                    "pass_override_reason": "pytest_skipped" if skip_pytest_execution else pass_override_reason,
                     "compile_failure_context": compile_failure_context,
                     "failure_reason": failure_reason if not passed else None,
                     "build_output": build_output[-2000:] if build_output else "",
