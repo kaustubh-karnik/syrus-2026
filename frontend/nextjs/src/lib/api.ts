@@ -55,7 +55,7 @@ export async function cloneRepository(
 
 export async function getTickets(baseUrl: string): Promise<JiraTicket[]> {
   const endpoint = `${normalizeBaseUrl(baseUrl)}/tickets`;
-  const response = await fetch(endpoint);
+  const response = await fetch(endpoint, { cache: "no-store" });
 
   if (!response.ok) {
     throw await parseError(response);

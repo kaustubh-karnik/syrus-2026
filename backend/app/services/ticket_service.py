@@ -1,11 +1,16 @@
 from app.mcp import JiraMCPClient
-from app.config import settings
+from app.config import get_settings
 
 
 class TicketService:
 
     def __init__(self):
-        self.client = JiraMCPClient(
+        pass
+
+    def _get_client(self):
+        """Create a fresh Jira client with current credentials from .env on every call"""
+        settings = get_settings(reload=True)
+        return JiraMCPClient(
             jira_url=settings.JIRA_URL,
             email=settings.JIRA_EMAIL,
             api_token=settings.JIRA_API_TOKEN,
@@ -14,7 +19,9 @@ class TicketService:
         )
 
     def fetch_tickets(self, limit=None):
-        return self.client.search_issues(max_results=limit)
+        client = self._get_client()
+        return client.search_issues(max_results=limit)
 
     def fetch_ticket(self, key):
-        return self.client.get_issue(key)
+        client = self._get_client()
+        return client.get_issue(key)

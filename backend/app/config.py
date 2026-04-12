@@ -1,10 +1,16 @@
 import os
+from dotenv import load_dotenv
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
 from typing import Optional
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
+
+# Ensure values in `.env` take precedence over any previously-exported environment variables.
+# This avoids "stale credentials" when rotating Jira credentials in the `.env` file.
+_DOTENV_PATH = PROJECT_ROOT / ".env"
+load_dotenv(dotenv_path=_DOTENV_PATH, override=True)
 
 def resolve_path_to_absolute(raw_path: Optional[str], base_for_relative: Optional[str] = None) -> str:
     """
@@ -126,6 +132,18 @@ class Settings(BaseSettings):
         return [item.strip() for item in raw_value.split(",") if item.strip()]
 
 settings = Settings()
+
+
+def get_settings(*, reload: bool = False) -> Settings:
+    """
+    Return a Settings instance. When `reload=True`, re-load `.env` (overriding
+    any existing process env vars) and re-instantiate Settings.
+    """
+    global settings
+    if reload:
+        load_dotenv(dotenv_path=_DOTENV_PATH, override=True)
+        settings = Settings()
+    return settings
 
 # Log resolved paths at startup for visibility
 _resolved_target_repo = getattr(settings, "TARGET_REPO_PATH", None)

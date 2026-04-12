@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from jira.exceptions import JIRAError
@@ -17,7 +17,7 @@ from app.agents.github_clone_agent import clone_repository_agent
 from app.agents.pipeline import run_pipeline_sequential, run_pipeline_with_retries
 from app.agents.ticket_analyzer import ticket_analyzer_node
 from app.agents.vector_search import vector_search_node
-from app.config import PROJECT_ROOT, settings
+from app.config import PROJECT_ROOT, get_settings, settings
 from app.mcp.github_client import GitHubMCPClient, parse_owner_repo_from_url, parse_repo_owner_name
 from app.mcp.jira_client import JiraMCPClient
 from app.services.ticket_service import TicketService
@@ -225,6 +225,7 @@ def _extract_pipeline_report(logs: str) -> Optional[dict]:
 
 
 def _build_jira_client() -> JiraMCPClient:
+    settings = get_settings(reload=True)
     return JiraMCPClient(
         jira_url=settings.JIRA_URL,
         email=settings.JIRA_EMAIL,
@@ -243,12 +244,14 @@ def _build_github_client() -> GitHubMCPClient:
 
 
 @app.get("/tickets")
-def get_tickets():
+def get_tickets(response: Response):
+    response.headers["Cache-Control"] = "no-store"
     return ticket_service.fetch_tickets()
 
 
 @app.get("/tickets/{ticket_id}")
-def get_ticket(ticket_id: str):
+def get_ticket(ticket_id: str, response: Response):
+    response.headers["Cache-Control"] = "no-store"
     return ticket_service.fetch_ticket(ticket_id)
 
 
