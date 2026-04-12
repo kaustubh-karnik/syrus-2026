@@ -300,62 +300,26 @@ function normalizeTestIdentifier(value: string): string {
   return String(value ?? "").replace(/\\/g, "/").trim().toLowerCase();
 }
 
-function uniqueTestNames(items: unknown[]): string[] {
-  const output: string[] = [];
-  const seen = new Set<string>();
-
-  for (const item of items) {
-    const value = String(item ?? "").trim();
-    if (!value) continue;
-    const normalized = normalizeTestIdentifier(value);
-    if (seen.has(normalized)) continue;
-    seen.add(normalized);
-    output.push(value);
-  }
-
-  return output;
-}
-
 function deriveTicketTestBreakdown(ticket: TicketReport): {
   selected: string[];
-  executed: string[];
   failed: string[];
   passed: string[];
-  displayTests: string[];
   failedOutsideSelection: string[];
-  inferredPassed: boolean;
 } {
-  const selected = uniqueTestNames(ticket.tests?.selected_tests ?? []);
-  const passedFromReport = uniqueTestNames(ticket.tests?.passed_tests ?? []);
-  const failed = uniqueTestNames(ticket.tests?.failed_tests ?? []);
+  const selected = (ticket.tests?.selected_tests ?? []).map((item) => String(item ?? "").trim()).filter(Boolean);
+  const failed = (ticket.tests?.failed_tests ?? []).map((item) => String(item ?? "").trim()).filter(Boolean);
 
   const failedNormalized = new Set(failed.map(normalizeTestIdentifier));
   const selectedNormalized = new Set(selected.map(normalizeTestIdentifier));
-  const executed = uniqueTestNames([...passedFromReport, ...failed]);
 
-  const inferredPassed =
-    passedFromReport.length === 0 &&
-    selected.length > 0 &&
-    failed.length < selected.length &&
-    ticket.tests?.passed !== false;
-
-  const passed =
-    passedFromReport.length > 0
-      ? passedFromReport
-      : inferredPassed
-        ? selected.filter((testName) => !failedNormalized.has(normalizeTestIdentifier(testName)))
-        : [];
-  const displayTests = selected.length > 0 ? uniqueTestNames([...selected, ...executed]) : executed;
+  const passed = selected.filter((testName) => !failedNormalized.has(normalizeTestIdentifier(testName)));
   const failedOutsideSelection = failed.filter((testName) => !selectedNormalized.has(normalizeTestIdentifier(testName)));
 
   return {
     selected,
-    executed,
     failed,
     passed,
-    displayTests,
     failedOutsideSelection,
-    inferredPassed,
   };
 }
 
@@ -465,7 +429,6 @@ function FeedbackBanner({ feedback }: { feedback: Feedback | null }) {
 
 function TicketReportAccordion({ item }: { item: TicketReport }) {
   const tests = item.tests ?? {};
-  const breakdown = deriveTicketTestBreakdown(item);
   const providerAttempts = item.provider_attempts ?? [];
   const providersUsed = (item.providers_used ?? []).map((provider) => normalizeProvider(provider));
   const providerSwitchEvents = deriveProviderSwitchEvents(item);
@@ -513,33 +476,10 @@ function TicketReportAccordion({ item }: { item: TicketReport }) {
         <h4>Validation</h4>
         <ul className="stack-list">
           <li>Passed: {String(tests.passed)}</li>
-          <li>Executed tests: {breakdown.executed.length}</li>
           <li>Selected tests: {safeToString(tests.selected_tests ?? [])}</li>
-          <li>Passed tests: {safeToString(tests.passed_tests ?? [])}</li>
           <li>Failed tests: {safeToString(tests.failed_tests ?? [])}</li>
           <li>Test plan source: {safeToString(tests.test_plan_source ?? "N/A")}</li>
-          <li>Pass override: {safeToString(tests.pass_override_reason ?? "N/A")}</li>
         </ul>
-
-        {tests.failure_reason ? (
-          <p>
-            <strong>Failure reason:</strong> <code>{tests.failure_reason}</code>
-          </p>
-        ) : null}
-
-        {tests.test_output ? (
-          <details className="llm-route-detail">
-            <summary>Validation output</summary>
-            <pre className="validation-log">{tests.test_output}</pre>
-          </details>
-        ) : null}
-
-        {tests.test_error ? (
-          <details className="llm-route-detail">
-            <summary>Validation stderr</summary>
-            <pre className="validation-log">{tests.test_error}</pre>
-          </details>
-        ) : null}
 
         <h4>LLM Routing</h4>
         <ul className="stack-list">
@@ -607,8 +547,7 @@ function TicketReportAccordion({ item }: { item: TicketReport }) {
 function TicketTestBreakdown({ ticket }: { ticket: TicketReport }) {
   const breakdown = deriveTicketTestBreakdown(ticket);
   const ticketBad = isTicketValidationFailed(ticket);
-  const noTests = breakdown.displayTests.length === 0;
-  const hasRawValidationLogs = Boolean(ticket.tests?.test_output || ticket.tests?.test_error);
+  const noTests = breakdown.selected.length === 0;
 
   return (
     <div className={`ticket-test-breakdown ${ticketBad ? "breakdown-failed" : "breakdown-passed"}`}>
@@ -618,7 +557,6 @@ function TicketTestBreakdown({ ticket }: { ticket: TicketReport }) {
           {ticketBad ? "✗ fail" : "✓ pass"}
         </span>
         <div className="breakdown-counts">
-          {breakdown.executed.length > 0 ? <span className="count-run">{breakdown.executed.length} ran</span> : null}
           {breakdown.passed.length > 0 ? <span className="count-pass">{breakdown.passed.length} passed</span> : null}
           {breakdown.failed.length > 0 ? <span className="count-fail">{breakdown.failed.length} failed</span> : null}
           {breakdown.failedOutsideSelection.length > 0 ? (
@@ -628,15 +566,9 @@ function TicketTestBreakdown({ ticket }: { ticket: TicketReport }) {
         </div>
       </div>
 
-      <div className="breakdown-meta">
-        {breakdown.selected.length > 0 ? <span>planned: {breakdown.selected.length}</span> : null}
-        {breakdown.inferredPassed ? <span>passed list inferred from selected tests</span> : null}
-        {ticket.tests?.test_plan_source ? <span>source: {ticket.tests.test_plan_source}</span> : null}
-      </div>
-
-      {breakdown.displayTests.length > 0 ? (
+      {breakdown.selected.length > 0 ? (
         <ul className="test-case-list">
-          {breakdown.displayTests.map((testName, index) => {
+          {breakdown.selected.map((testName, index) => {
             const normalized = normalizeTestIdentifier(testName);
             const failed = breakdown.failed.some((item) => normalizeTestIdentifier(item) === normalized);
             const passed = breakdown.passed.some((item) => normalizeTestIdentifier(item) === normalized);
@@ -652,14 +584,6 @@ function TicketTestBreakdown({ ticket }: { ticket: TicketReport }) {
             );
           })}
         </ul>
-      ) : null}
-
-      {hasRawValidationLogs ? (
-        <details className="breakdown-log-detail">
-          <summary>Validation log details</summary>
-          {ticket.tests?.test_output ? <pre className="validation-log">{ticket.tests.test_output}</pre> : null}
-          {ticket.tests?.test_error ? <pre className="validation-log validation-log-error">{ticket.tests.test_error}</pre> : null}
-        </details>
       ) : null}
 
       {(noTests || breakdown.failedOutsideSelection.length > 0) && ticketBad && ticket.error ? (
@@ -789,20 +713,18 @@ export default function DashboardPage() {
     let failedBeforeTests = 0;
 
     for (const ticket of pipelineReport?.tickets ?? []) {
-      const breakdown = deriveTicketTestBreakdown(ticket);
-      const selected = breakdown.selected.length;
-      const executed = breakdown.executed.length;
-      const failedCount = breakdown.failed.length;
-      const passedCount = breakdown.passed.length > 0 ? breakdown.passed.length : Math.max(0, executed - failedCount);
-      const skippedCount = selected > 0 ? Math.max(0, selected - passedCount - failedCount) : 0;
+      const selected = ticket.tests?.selected_tests?.length ?? 0;
+      const failedCount = ticket.tests?.failed_tests?.length ?? 0;
+      const passedCount = Math.max(0, selected - failedCount);
 
       passed += passedCount;
+
       failed += failedCount;
-      skipped += skippedCount;
+      skipped += Math.max(0, selected - passedCount - failedCount);
 
       if (isTicketValidationFailed(ticket)) {
         ticketFailed += 1;
-        if (executed === 0 && failedCount === 0) {
+        if (failedCount === 0) {
           failedBeforeTests += 1;
         }
       } else {
